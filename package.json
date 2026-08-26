@@ -8,7 +8,8 @@
     "start": "node server.js",
     "stop": "sh ./scripts/free-port.sh",
     "predev": "npm run stop",
-    "dev": "nodemon --no-stdin server.js"
+    "dev": "nodemon --no-stdin server.js",
+    "seed:demo-feeds": "node scripts/seed-demo-feeds.js"
   },
   "author": "",
   "license": "ISC",
@@ -24,6 +25,7 @@
     "express": "^5.1.0",
     "firebase-admin": "^13.10.0",
     "fs": "^0.0.1-security",
+    "google-auth-library": "^10.6.2",
     "http-status": "^2.1.0",
     "jsonwebtoken": "^9.0.2",
     "moment": "^2.30.1",

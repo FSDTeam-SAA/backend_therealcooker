@@ -79,13 +79,17 @@ export const deleteNews = catchAsync(async (req, res) => {
 
 // Public: get all news (published)
 export const getNews = catchAsync(async (req, res) => {
-  const { category } = req.query;
+  const { category, limit: rawLimit } = req.query;
   const filter = { isPublished: true };
   if (category) filter.category = category;
+  const parsedLimit = Number.parseInt(rawLimit, 10);
+  const limit = Number.isInteger(parsedLimit) && parsedLimit > 0
+    ? Math.min(parsedLimit, 50)
+    : 0;
 
-  const news = await News.find(filter)
-    .sort({ createdAt: -1 })
-    .populate("author", "name");
+  let query = News.find(filter).sort({ createdAt: -1 });
+  if (limit > 0) query = query.limit(limit);
+  const news = await query.populate("author", "name");
   sendResponse(res, {
     statusCode: httpStatus.OK,
     success: true,

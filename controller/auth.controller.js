@@ -6,6 +6,36 @@ import httpStatus from "http-status";
 import sendResponse from "../utils/sendResponse.js";
 import { sendEmail } from "../utils/sendEmail.js";
 import { User } from "../model/user.model.js";
+import crypto from "node:crypto";
+import { verifyGoogleIdToken } from "../utils/googleAuth.js";
+
+const issueAuthTokens = (user) => {
+  const jwtPayload = {
+    _id: user._id,
+    email: user.email,
+    role: user.role,
+  };
+  const accessToken = createToken(
+    jwtPayload,
+    process.env.JWT_ACCESS_SECRET,
+    process.env.JWT_ACCESS_EXPIRES_IN
+  );
+  const refreshToken = createToken(
+    jwtPayload,
+    process.env.JWT_REFRESH_SECRET,
+    process.env.JWT_REFRESH_EXPIRES_IN
+  );
+
+  user.refreshToken = refreshToken;
+  return { accessToken, refreshToken };
+};
+
+const toAuthResponse = (user, accessToken, extra = {}) => {
+  const userObj = user.toObject();
+  delete userObj.googleId;
+  userObj.accessToken = accessToken;
+  return Object.assign(userObj, extra);
+};
 
 // Register (Admin only? but we can allow self-registration too)
 export const register = catchAsync(async (req, res) => {
@@ -79,26 +109,10 @@ export const verifySignupOtp = catchAsync(async (req, res) => {
   user.verificationInfo.verified = true;
   user.verificationInfo.token = "";
 
-  const jwtPayload = {
-    _id: user._id,
-    email: user.email,
-    role: user.role,
-  };
-  const accessToken = createToken(
-    jwtPayload,
-    process.env.JWT_ACCESS_SECRET,
-    process.env.JWT_ACCESS_EXPIRES_IN
-  );
-  const refreshToken = createToken(
-    jwtPayload,
-    process.env.JWT_REFRESH_SECRET,
-    process.env.JWT_REFRESH_EXPIRES_IN
-  );
-  user.refreshToken = refreshToken;
+  const { accessToken } = issueAuthTokens(user);
   await user.save();
 
-  const userObj = user.toObject();
-  userObj.accessToken = accessToken;
+  const userObj = toAuthResponse(user, accessToken);
 
   sendResponse(res, {
     statusCode: httpStatus.OK,
@@ -166,31 +180,83 @@ export const login = catchAsync(async (req, res) => {
     );
   }
 
-  const jwtPayload = {
-    _id: user._id,
-    email: user.email,
-    role: user.role,
-  };
-  const accessToken = createToken(
-    jwtPayload,
-    process.env.JWT_ACCESS_SECRET,
-    process.env.JWT_ACCESS_EXPIRES_IN
-  );
-  const refreshToken = createToken(
-    jwtPayload,
-    process.env.JWT_REFRESH_SECRET,
-    process.env.JWT_REFRESH_EXPIRES_IN
-  );
-  user.refreshToken = refreshToken;
+  const { accessToken } = issueAuthTokens(user);
   await user.save();
 
-  const userObj = user.toObject();
-  userObj.accessToken = accessToken;
+  const userObj = toAuthResponse(user, accessToken);
 
   sendResponse(res, {
     statusCode: httpStatus.OK,
     success: true,
     message: "Login successful",
+    data: userObj,
+  });
+});
+
+export const googleLogin = catchAsync(async (req, res) => {
+  const { idToken } = req.body;
+  if (!idToken || typeof idToken !== "string") {
+    throw new AppError(httpStatus.BAD_REQUEST, "Google ID token is required");
+  }
+
+  let googleProfile;
+  try {
+    googleProfile = await verifyGoogleIdToken(idToken);
+  } catch (_) {
+    throw new AppError(
+      httpStatus.UNAUTHORIZED,
+      "Google authentication could not be verified"
+    );
+  }
+
+  const { googleId, email, name, picture } = googleProfile;
+  const escapedEmail = email.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+  let user = await User.findOne({ googleId }).select("+googleId");
+  if (!user) {
+    user = await User.findOne({
+      email: { $regex: `^${escapedEmail}$`, $options: "i" },
+    }).select("+googleId");
+  }
+
+  let isNewUser = false;
+  if (user) {
+    if (user.googleId && user.googleId !== googleId) {
+      throw new AppError(
+        httpStatus.CONFLICT,
+        "This email is already linked to another Google account"
+      );
+    }
+
+    user.googleId = googleId;
+    user.verificationInfo.verified = true;
+    user.verificationInfo.token = "";
+    if (!user.avatar?.url && picture) {
+      user.avatar = { public_id: "", url: picture };
+    }
+  } else {
+    isNewUser = true;
+    user = new User({
+      name,
+      email,
+      googleId,
+      password: crypto.randomBytes(32).toString("hex"),
+      verificationInfo: { verified: true, token: "" },
+      avatar: { public_id: "", url: picture },
+    });
+  }
+
+  const { accessToken } = issueAuthTokens(user);
+  await user.save();
+
+  const userObj = toAuthResponse(user, accessToken, { isNewUser });
+
+  sendResponse(res, {
+    statusCode: httpStatus.OK,
+    success: true,
+    message: isNewUser
+      ? "Google account created successfully"
+      : "Google login successful",
     data: userObj,
   });
 });

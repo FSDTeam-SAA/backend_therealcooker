@@ -3,6 +3,7 @@ import crypto from "crypto";
 // https://sandbox.dojah.io while testing; switch to https://api.dojah.io
 // once you move to live keys.
 const BASE_URL = process.env.DOJAH_BASE_URL || "https://sandbox.dojah.io";
+const DEFAULT_WIDGET_ID = "6a8cefd14fe3f81e010810d1";
 
 const authHeaders = () => ({
   Authorization: process.env.DOJAH_SECRET_KEY, // raw secret key, no "Bearer"
@@ -16,7 +17,7 @@ const authHeaders = () => ({
 export const widgetConfig = () => ({
   appId: process.env.DOJAH_APP_ID,
   publicKey: process.env.DOJAH_PUBLIC_KEY,
-  widgetId: process.env.DOJAH_WIDGET_ID,
+  widgetId: process.env.DOJAH_WIDGET_ID || DEFAULT_WIDGET_ID,
 });
 
 // The authoritative check: ask Dojah directly for a verification's current

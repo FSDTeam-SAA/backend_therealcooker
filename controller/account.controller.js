@@ -108,14 +108,17 @@ const resolveProtectorUser = async (guardian) => {
   return protectorUser;
 };
 
-const findAcceptedGuardianUsers = async (userId) => {
-  // Only the primary guardian receives emergency alerts alongside the user;
-  // secondary guardians are intentionally excluded.
-  const acceptedGuardians = await Guardian.find({
+const findAcceptedGuardianUsers = async (
+  userId,
+  { primaryOnly = true } = {}
+) => {
+  const guardianQuery = {
     user: userId,
     status: "accepted",
-    isPrimary: true,
-  });
+  };
+  if (primaryOnly) guardianQuery.isPrimary = true;
+
+  const acceptedGuardians = await Guardian.find(guardianQuery);
   const guardianUsers = [];
   for (const guardian of acceptedGuardians) {
     const protectorUser = await resolveProtectorUser(guardian);
@@ -600,19 +603,21 @@ export const activateEmergencyMode = catchAsync(async (req, res) => {
   });
 });
 
-// Lighter-weight than activateEmergencyMode: notifies the primary guardian
+// Lighter-weight than activateEmergencyMode: notifies every accepted guardian
 // the same way (same notification/socket mechanism, same alert screen on
 // their end), but doesn't lock any accounts or create an EmergencySession.
 // The alert screen's "End Emergency" action stays hidden for this because
 // there's no session id in the payload for it to act on.
 export const alertGuardian = catchAsync(async (req, res) => {
   const eventLocation = parseEmergencyLocation(req.body?.eventLocation);
-  const guardianUsers = await findAcceptedGuardianUsers(req.user._id);
+  const guardianUsers = await findAcceptedGuardianUsers(req.user._id, {
+    primaryOnly: false,
+  });
 
   if (guardianUsers.length === 0) {
     throw new AppError(
       httpStatus.BAD_REQUEST,
-      "No primary guardian is linked to alert"
+      "No accepted guardians are linked to alert"
     );
   }
 
@@ -649,7 +654,7 @@ export const alertGuardian = catchAsync(async (req, res) => {
   sendResponse(res, {
     statusCode: httpStatus.OK,
     success: true,
-    message: "Your guardian has been alerted",
+    message: "All guardians have been alerted",
     data: payload,
   });
 });
