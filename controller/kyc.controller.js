@@ -18,10 +18,20 @@ import sendResponse from "../utils/sendResponse.js";
 const generateReferenceId = (userId) =>
   `DJ-${userId}-${crypto.randomBytes(4).toString("hex")}`;
 
-// Starts (or restarts) a KYC session: mints a reference_id, stores it as
-// "pending" on the user, and hands back everything the app's embedded
-// Dojah widget page needs to launch — the public key and app id, never the
-// secret key.
+// Starts (or restarts) a KYC session: mints a reference_id and hands back
+// everything the app's embedded Dojah widget page needs to launch — the
+// public key and app id, never the secret key.
+//
+// Deliberately resets status to "not_started" rather than "pending" —
+// opening the widget isn't a submission. This also self-heals a stale
+// "pending"/"failed" left over from a previous attempt's referenceId (which
+// Dojah has no record for any more, so getKycStatus's poll could never
+// clear it on its own): every fresh attempt starts from a clean slate, and
+// if the user backs out (or the widget's close event fires) before
+// actually submitting anything, status stays "not_started" so the Profile
+// screen keeps showing "Verify Now" instead of a phantom "pending".
+// getKycStatus is what actually promotes this to "pending", once Dojah
+// confirms something was submitted for this reference_id.
 export const createKycSession = catchAsync(async (req, res) => {
   const user = await User.findById(req.user._id);
   if (!user) {
@@ -37,7 +47,7 @@ export const createKycSession = catchAsync(async (req, res) => {
   }
 
   const referenceId = generateReferenceId(user._id.toString());
-  user.kyc.status = "pending";
+  user.kyc.status = "not_started";
   user.kyc.referenceId = referenceId;
   user.kyc.verifiedAt = undefined;
   await user.save();
@@ -60,23 +70,36 @@ export const createKycSession = catchAsync(async (req, res) => {
   });
 });
 
-// Reconciles and returns the current KYC status. If the last known status
-// is still "pending" this actively asks Dojah for the latest state instead
-// of only trusting whatever the webhook has (or hasn't) delivered yet —
-// the webhook needs a publicly reachable URL, which a local dev backend
-// usually isn't, so this poll is what makes status checking work
-// everywhere the webhook can't reach.
+// Reconciles and returns the current KYC status. As long as the current
+// session hasn't already reached a terminal state ("completed"/"failed"),
+// this actively asks Dojah for the latest state instead of only trusting
+// whatever the webhook has (or hasn't) delivered yet — the webhook needs a
+// publicly reachable URL, which a local dev backend usually isn't, so this
+// poll is what makes status checking work everywhere the webhook can't
+// reach.
+//
+// This also covers the not_started case with a referenceId still on file
+// (a session was created but createKycSession no longer marks it
+// "pending" up front) — if the user actually submitted something before
+// backing out, this is what promotes the status to "pending"; if they
+// closed the widget without submitting, Dojah has nothing on record for
+// that reference_id, fetchVerification fails, and the status correctly
+// stays not_started.
 export const getKycStatus = catchAsync(async (req, res) => {
   const user = await User.findById(req.user._id);
   if (!user) {
     throw new AppError(httpStatus.NOT_FOUND, "User not found");
   }
 
-  if (user.kyc?.status === "pending" && user.kyc?.referenceId) {
+  const reconcilableStatuses = ["not_started", "pending"];
+  if (
+    reconcilableStatuses.includes(user.kyc?.status) &&
+    user.kyc?.referenceId
+  ) {
     try {
       const verification = await fetchVerification(user.kyc.referenceId);
       const status = mapVerificationStatus(verification);
-      if (status !== "pending") {
+      if (status !== user.kyc.status) {
         user.kyc.status = status;
         user.kyc.idType = verification.id_type || user.kyc.idType;
         user.kyc.raw = verification;
@@ -84,7 +107,8 @@ export const getKycStatus = catchAsync(async (req, res) => {
         await user.save();
       }
     } catch (error) {
-      // Dojah being unreachable/erroring shouldn't fail the status check —
+      // Dojah being unreachable/erroring (including "no such verification"
+      // when nothing was ever submitted) shouldn't fail the status check —
       // just fall through and report whatever we already had stored.
       console.error("Dojah verification poll failed:", error.message);
     }
