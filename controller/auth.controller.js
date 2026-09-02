@@ -9,6 +9,8 @@ import { User } from "../model/user.model.js";
 import crypto from "node:crypto";
 import { verifyGoogleIdToken } from "../utils/googleAuth.js";
 
+const AUTH_OTP_LENGTH = 4;
+
 const issueAuthTokens = (user) => {
   const jwtPayload = {
     _id: user._id,
@@ -60,7 +62,7 @@ export const register = catchAsync(async (req, res) => {
     );
   }
 
-  const otp = generateOTP(4);
+  const otp = generateOTP(AUTH_OTP_LENGTH);
 
   const user = await User.create({
     userId,
@@ -138,7 +140,7 @@ export const resendSignupOtp = catchAsync(async (req, res) => {
     throw new AppError(httpStatus.BAD_REQUEST, "Email is already verified");
   }
 
-  const otp = generateOTP(4);
+  const otp = generateOTP(AUTH_OTP_LENGTH);
   user.verificationInfo.token = otp;
   await user.save();
 
@@ -307,7 +309,7 @@ export const forgotPassword = catchAsync(async (req, res) => {
   if (!user) {
     throw new AppError(httpStatus.NOT_FOUND, "User not found");
   }
-  const otp = generateOTP();
+  const otp = generateOTP(AUTH_OTP_LENGTH);
   user.password_reset_token = otp;
   await user.save();
 
