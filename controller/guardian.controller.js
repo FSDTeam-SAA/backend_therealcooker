@@ -681,6 +681,83 @@ const resolvePrimaryChangeNotifications = async (requestId, decision) => {
   );
 };
 
+// Owner-only cancellation. The proposed guardian remains Secondary and the
+// current Primary Guardian's approval notification is marked as resolved.
+export const cancelPrimaryGuardianChange = catchAsync(async (req, res) => {
+  const { id } = req.params;
+
+  const changeRequest = await PrimaryGuardianChangeRequest.findOneAndUpdate(
+    {
+      user: req.user._id,
+      proposedPrimaryGuardian: id,
+      status: "pending",
+    },
+    { $set: { status: "cancelled", resolvedAt: new Date() } },
+    { new: true }
+  )
+    .populate("currentPrimaryGuardianUser", "name email")
+    .populate("proposedPrimaryGuardian", "name");
+
+  if (!changeRequest) {
+    throw new AppError(
+      httpStatus.CONFLICT,
+      "No pending Primary Guardian change was found to cancel"
+    );
+  }
+
+  try {
+    await resolvePrimaryChangeNotifications(changeRequest._id, "cancelled");
+  } catch (error) {
+    // Cancellation is already persisted. Keep the API successful even if a
+    // stale approval notification cannot be updated immediately.
+    console.error("Primary Guardian cancellation sync failed:", error);
+  }
+
+  const currentPrimaryUserId = changeRequest.currentPrimaryGuardianUser?._id;
+  const proposedGuardianId = changeRequest.proposedPrimaryGuardian?._id || id;
+  const proposedGuardianName =
+    changeRequest.proposedPrimaryGuardian?.name || "the selected guardian";
+
+  if (currentPrimaryUserId) {
+    try {
+      await createAndEmitNotification({
+        recipient: currentPrimaryUserId,
+        sender: req.user._id,
+        type: "guardian_primary_change_cancelled",
+        title: "Primary Guardian change cancelled",
+        body: `${userLabel(req.user)} cancelled the request to make ${proposedGuardianName} their Primary Guardian.`,
+        data: {
+          requestId: changeRequest._id,
+          resolved: true,
+          decision: "cancelled",
+          proposedPrimaryGuardian: {
+            id: proposedGuardianId,
+            name: proposedGuardianName,
+          },
+        },
+      });
+    } catch (error) {
+      // Cancellation is already persisted; a notification delivery problem
+      // must not turn a successful cancellation into a retryable API failure.
+      console.error("Primary Guardian cancellation notification failed:", error);
+    }
+  }
+
+  sendResponse(res, {
+    statusCode: httpStatus.OK,
+    success: true,
+    message: "Primary Guardian change cancelled",
+    data: {
+      requestId: changeRequest._id,
+      status: "cancelled",
+      proposedPrimaryGuardian: {
+        id: proposedGuardianId,
+        name: proposedGuardianName,
+      },
+    },
+  });
+});
+
 // Current-Primary-Guardian-only. The role swap and request resolution happen
 // in one transaction, so an interrupted approval cannot leave the owner with
 // no Primary Guardian or with two of them.

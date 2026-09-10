@@ -5,6 +5,7 @@
   "main": "server.js",
   "type": "module",
   "scripts": {
+    "test": "node --test test/*.test.js",
     "start": "node server.js",
     "stop": "sh ./scripts/free-port.sh",
     "predev": "npm run stop",

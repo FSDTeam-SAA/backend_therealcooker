@@ -11,6 +11,7 @@ import {
   rejectGuardianInvite,
   resendGuardianInvite,
   makeGuardianPrimary,
+  cancelPrimaryGuardianChange,
   approvePrimaryGuardianChange,
   rejectPrimaryGuardianChange,
   requestGuardianDeletion,
@@ -35,6 +36,7 @@ router.post(
 router.post("/:id/reject", rejectGuardianInvite);
 router.post("/:id/resend-invite", resendGuardianInvite);
 router.put("/:id/make-primary", makeGuardianPrimary);
+router.delete("/:id/primary-change", cancelPrimaryGuardianChange);
 router.post(
   "/primary-change/:requestId/approve",
   approvePrimaryGuardianChange
