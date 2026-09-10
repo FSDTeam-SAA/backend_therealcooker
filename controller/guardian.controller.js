@@ -305,7 +305,7 @@ const mergeAccountsIntoGuardian = async (guardian, accounts, requester) => {
 
 // Create guardian. Guardians protect all of the requester's accounts.
 export const createGuardian = catchAsync(async (req, res) => {
-  const { name, email, phone, relationship, isPrimary } = req.body;
+  const { name, email, phone, relationship } = req.body;
 
   if (!name || !email || !phone) {
     throw new AppError(httpStatus.BAD_REQUEST, "Missing required fields");
@@ -345,7 +345,6 @@ export const createGuardian = catchAsync(async (req, res) => {
   );
   const isFirstGuardian = existingGuardians.length === 0;
   const shouldBePrimary = isFirstGuardian;
-  const wantsPrimaryChange = !isFirstGuardian && isPrimary === true;
   const secondaryCount = existingGuardians.filter(
     (guardian) => !guardian.isPrimary
   ).length;
@@ -361,18 +360,6 @@ export const createGuardian = catchAsync(async (req, res) => {
       "You can add up to 3 secondary guardians"
     );
   }
-  if (wantsPrimaryChange) {
-    const currentPrimary = existingGuardians.find(
-      (guardian) => guardian.isPrimary
-    );
-    if (!currentPrimary || currentPrimary.status !== "accepted") {
-      throw new AppError(
-        httpStatus.CONFLICT,
-        "Wait for your current Primary Guardian to accept before changing roles"
-      );
-    }
-  }
-
   const accounts = await Account.find({
     user: req.user._id,
     isActive: true,
@@ -383,20 +370,6 @@ export const createGuardian = catchAsync(async (req, res) => {
   // of rejecting the request. Adding the same person to the same account twice
   // is a no-op (deduped here and by the GuardianAccount unique index).
   if (existingGuardian) {
-    let primaryChangeRequested = false;
-    if (wantsPrimaryChange && !existingGuardian.isPrimary) {
-      if (existingGuardian.status === "pending") {
-        existingGuardian.requestedPrimary = true;
-        primaryChangeRequested = true;
-      } else {
-        const change = await requestPrimaryGuardianChange({
-          requester: req.user,
-          proposedPrimary: existingGuardian,
-        });
-        primaryChangeRequested = !change.alreadyPrimary;
-      }
-      await existingGuardian.save();
-    }
     const { addedCount, payload } = await mergeAccountsIntoGuardian(
       existingGuardian,
       accounts,
@@ -415,7 +388,7 @@ export const createGuardian = catchAsync(async (req, res) => {
         ...payload,
         addedCount,
         alreadyLinked: addedCount === 0,
-        primaryChangeRequested,
+        primaryChangeRequested: false,
       },
     });
     return;
@@ -430,16 +403,14 @@ export const createGuardian = catchAsync(async (req, res) => {
     phone,
     relationship,
     isPrimary: shouldBePrimary,
-    requestedPrimary: wantsPrimaryChange,
+    requestedPrimary: false,
     status: "pending",
     requestedAccounts: accounts.map((account) => account._id),
   });
 
   const requesterName = req.user.name || req.user.email;
   const guardianRole = guardian.isPrimary ? "primary" : "secondary";
-  const inviteBody = guardian.requestedPrimary
-    ? `${requesterName} invited you to be their guardian and intends to request you as Primary after you accept.`
-    : `${requesterName} invited you to be their ${guardianRole} guardian.`;
+  const inviteBody = `${requesterName} invited you to be their ${guardianRole} guardian.`;
   await createAndEmitNotification({
     recipient: protectorUser._id,
     sender: req.user._id,
