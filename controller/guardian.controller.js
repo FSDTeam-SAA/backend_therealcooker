@@ -310,13 +310,22 @@ export const createGuardian = catchAsync(async (req, res) => {
   if (!name || !email || !phone) {
     throw new AppError(httpStatus.BAD_REQUEST, "Missing required fields");
   }
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    throw new AppError(httpStatus.BAD_REQUEST, "Enter a valid email address");
+  }
+  if (!/^0\d{9}$/.test(phone)) {
+    throw new AppError(
+      httpStatus.BAD_REQUEST,
+      "Phone number must be 10 digits and begin with 0"
+    );
+  }
 
   // The protector must already be a registered user on the platform
   const protectorUser = await User.findOne({ email });
   if (!protectorUser) {
     throw new AppError(
       httpStatus.BAD_REQUEST,
-      "Protector must have an active account"
+      "Guardian must have an active account"
     );
   }
 
@@ -508,8 +517,21 @@ export const updateGuardian = catchAsync(async (req, res) => {
   }
 
   if (name) guardian.name = name;
-  if (email) guardian.email = email;
-  if (phone) guardian.phone = phone;
+  if (email) {
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      throw new AppError(httpStatus.BAD_REQUEST, "Enter a valid email address");
+    }
+    guardian.email = email;
+  }
+  if (phone) {
+    if (!/^0\d{9}$/.test(phone)) {
+      throw new AppError(
+        httpStatus.BAD_REQUEST,
+        "Phone number must be 10 digits and begin with 0"
+      );
+    }
+    guardian.phone = phone;
+  }
   if (relationship) guardian.relationship = relationship;
 
   await guardian.save();

@@ -402,6 +402,12 @@ export const createAccount = catchAsync(async (req, res) => {
   if (!accountType || !accountNumberEncrypted) {
     throw new AppError(httpStatus.BAD_REQUEST, "Missing required fields");
   }
+  if (!/^\d{7,}$/.test(String(accountNumberEncrypted).trim())) {
+    throw new AppError(
+      httpStatus.BAD_REQUEST,
+      "Account number must contain at least 7 digits"
+    );
+  }
   if (accountType === "bank" && !bankName) {
     throw new AppError(httpStatus.BAD_REQUEST, "Bank name is required for bank accounts");
   }
@@ -795,7 +801,15 @@ export const updateAccount = catchAsync(async (req, res) => {
   if (accountType) account.accountType = accountType;
   if (bankName) account.bankName = bankName;
   if (nickname !== undefined) account.nickname = nickname?.trim() || "";
-  if (accountNumberEncrypted) account.accountNumberEncrypted = accountNumberEncrypted;
+  if (accountNumberEncrypted) {
+    if (!/^\d{7,}$/.test(String(accountNumberEncrypted).trim())) {
+      throw new AppError(
+        httpStatus.BAD_REQUEST,
+        "Account number must contain at least 7 digits"
+      );
+    }
+    account.accountNumberEncrypted = accountNumberEncrypted;
+  }
   if (isActive !== undefined) account.isActive = isActive;
 
   await account.save();
