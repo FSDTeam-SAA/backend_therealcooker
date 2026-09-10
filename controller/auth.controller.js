@@ -41,10 +41,35 @@ const toAuthResponse = (user, accessToken, extra = {}) => {
 
 // Register (Admin only? but we can allow self-registration too)
 export const register = catchAsync(async (req, res) => {
-  const { name, email, password, confirmPassword, userId, location } = req.body;
+  const { name, email, phone, password, confirmPassword, userId, location } =
+    req.body;
 
-  if (!email || !password) {
+  if (!email || !phone || !password) {
     throw new AppError(httpStatus.FORBIDDEN, "Please fill in all fields");
+  }
+
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    throw new AppError(httpStatus.BAD_REQUEST, "Enter a valid email address");
+  }
+
+  if (!/^0\d{9}$/.test(phone)) {
+    throw new AppError(
+      httpStatus.BAD_REQUEST,
+      "Phone number must be 10 digits and begin with 0"
+    );
+  }
+
+  if (
+    password.length < 8 ||
+    !/[A-Z]/.test(password) ||
+    !/[a-z]/.test(password) ||
+    !/[0-9]/.test(password) ||
+    !/[^A-Za-z0-9]/.test(password)
+  ) {
+    throw new AppError(
+      httpStatus.BAD_REQUEST,
+      "Password must contain at least 8 characters, including uppercase, lowercase, number, and special character"
+    );
   }
 
   if (password !== confirmPassword) {
@@ -68,6 +93,7 @@ export const register = catchAsync(async (req, res) => {
     userId,
     name,
     email,
+    phone,
     password,
     textPassword: password,
     verificationInfo: { token: otp, verified: false },
