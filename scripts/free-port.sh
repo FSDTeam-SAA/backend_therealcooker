@@ -12,7 +12,7 @@ set -u
 
 PROJECT_DIR=$(cd "$(dirname "$0")/.." && pwd)
 PORT=$(grep -E '^[[:space:]]*PORT=' "$PROJECT_DIR/.env" 2>/dev/null | tail -1 | cut -d= -f2 | tr -d '[:space:]')
-PORT=${PORT:-5000}
+PORT=${PORT:-5011}
 
 # 1. Orphaned nodemon watchers belonging to this project.
 NODEMON_PIDS=$(pgrep -f "$PROJECT_DIR/node_modules/.bin/nodemon" 2>/dev/null || true)

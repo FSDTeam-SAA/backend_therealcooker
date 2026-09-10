@@ -1,16 +1,30 @@
 import nodemailer from "nodemailer";
+import {
+  EMAIL_HOST,
+  EMAIL_PORT,
+  EMAIL_USER,
+  EMAIL_PASS,
+} from "../confiig/env.js";
+
+const emailHost = EMAIL_HOST || "smtp.gmail.com";
+const emailPort = Number(EMAIL_PORT) || 587;
+
 export const sendEmail = async ({ email, subject, message }) => {
+  if (!EMAIL_USER || !EMAIL_PASS) {
+    throw new Error("Email service credentials are not configured");
+  }
+
   const transporter = nodemailer.createTransport({
-    host: "smtp.gmail.com",
-    port: 587,
-    secure: false,
+    host: emailHost,
+    port: emailPort,
+    secure: emailPort === 465,
     auth: {
-      user: "finishersrepair@gmail.com",
-      pass: "rvclyuctitamywaw",
+      user: EMAIL_USER,
+      pass: EMAIL_PASS,
     },
   });
   await transporter.sendMail({
-    from: "finishersrepair@gmail.com",
+    from: EMAIL_USER,
     to: email,
     subject: subject
       ? subject

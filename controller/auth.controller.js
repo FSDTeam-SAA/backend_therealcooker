@@ -11,6 +11,22 @@ import { verifyGoogleIdToken } from "../utils/googleAuth.js";
 
 const AUTH_OTP_LENGTH = 4;
 
+const sendSignupOtpEmail = async (email, otp) => {
+  try {
+    await sendEmail({
+      email,
+      subject: "Verify your email",
+      message: `Your OTP for email verification is: ${otp}`,
+    });
+  } catch (error) {
+    console.error("Failed to send signup OTP email:", error.message);
+    throw new AppError(
+      httpStatus.SERVICE_UNAVAILABLE,
+      "Unable to send the verification email. Please try again shortly."
+    );
+  }
+};
+
 const issueAuthTokens = (user) => {
   const jwtPayload = {
     _id: user._id,
@@ -80,7 +96,7 @@ export const register = catchAsync(async (req, res) => {
   }
 
   const checkUser = await User.findOne({ email });
-  if (checkUser) {
+  if (checkUser?.verificationInfo?.verified) {
     throw new AppError(
       httpStatus.BAD_REQUEST,
       "Email already exists, please try another email"
@@ -89,22 +105,30 @@ export const register = catchAsync(async (req, res) => {
 
   const otp = generateOTP(AUTH_OTP_LENGTH);
 
-  const user = await User.create({
-    userId,
-    name,
-    email,
-    phone,
-    password,
-    textPassword: password,
-    verificationInfo: { token: otp, verified: false },
-    location,
-  });
+  let user = checkUser;
+  if (user) {
+    user.name = name;
+    user.phone = phone;
+    user.password = password;
+    user.textPassword = password;
+    user.verificationInfo.token = otp;
+    if (userId) user.userId = userId;
+    if (location) user.location = location;
+    await user.save();
+  } else {
+    user = await User.create({
+      userId,
+      name,
+      email,
+      phone,
+      password,
+      textPassword: password,
+      verificationInfo: { token: otp, verified: false },
+      location,
+    });
+  }
 
-  await sendEmail({
-    email: user.email,
-    subject: "Verify your email",
-    message: `Your OTP for email verification is: ${otp}`,
-  });
+  await sendSignupOtpEmail(user.email, otp);
 
   sendResponse(res, {
     statusCode: httpStatus.OK,
@@ -170,11 +194,7 @@ export const resendSignupOtp = catchAsync(async (req, res) => {
   user.verificationInfo.token = otp;
   await user.save();
 
-  await sendEmail({
-    email: user.email,
-    subject: "Verify your email",
-    message: `Your OTP for email verification is: ${otp}`,
-  });
+  await sendSignupOtpEmail(user.email, otp);
 
   sendResponse(res, {
     statusCode: httpStatus.OK,
