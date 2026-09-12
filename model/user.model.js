@@ -23,6 +23,7 @@ const userSchema = new Schema(
       default: "user",
       enum: ["user", "admin"],
     },
+    isBlocked: { type: Boolean, default: false },
     avatar: {
       public_id: { type: String, default: "" },
       url: { type: String, default: "" },

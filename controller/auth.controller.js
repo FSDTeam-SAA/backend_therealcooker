@@ -221,6 +221,10 @@ export const login = catchAsync(async (req, res) => {
     throw new AppError(httpStatus.UNAUTHORIZED, "Invalid credentials");
   }
 
+  if (user.isBlocked) {
+    throw new AppError(httpStatus.FORBIDDEN, "Your account has been blocked");
+  }
+
   if (!user.verificationInfo.verified) {
     throw new AppError(
       httpStatus.FORBIDDEN,

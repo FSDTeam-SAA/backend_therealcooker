@@ -49,3 +49,25 @@ export const getRecentUsers = catchAsync(async (req, res) => {
     data: users,
   });
 });
+
+export const getGuardiansForAdmin = catchAsync(async (req, res) => {
+  const page = Math.max(Number.parseInt(req.query.page, 10) || 1, 1);
+  const limit = Math.min(Math.max(Number.parseInt(req.query.limit, 10) || 10, 1), 50);
+  const search = req.query.search?.trim();
+  const filter = search
+    ? { $or: [{ name: { $regex: search, $options: "i" } }, { email: { $regex: search, $options: "i" } }, { phone: { $regex: search, $options: "i" } }] }
+    : {};
+  const [guardians, total] = await Promise.all([
+    Guardian.find(filter).populate("user", "name email userId").sort({ createdAt: -1 }).skip((page - 1) * limit).limit(limit),
+    Guardian.countDocuments(filter),
+  ]);
+  sendResponse(res, { statusCode: httpStatus.OK, success: true, message: "Guardians fetched successfully", data: { guardians, pagination: { page, limit, total, totalPages: Math.max(Math.ceil(total / limit), 1) } } });
+});
+
+export const setUserBlocked = catchAsync(async (req, res) => {
+  const user = await User.findById(req.params.id);
+  if (!user || user.role === "admin") return sendResponse(res, { statusCode: httpStatus.NOT_FOUND, success: false, message: "User not found", data: null });
+  user.isBlocked = Boolean(req.body.isBlocked);
+  await user.save();
+  sendResponse(res, { statusCode: httpStatus.OK, success: true, message: user.isBlocked ? "User blocked successfully" : "User unblocked successfully", data: { _id: user._id, isBlocked: user.isBlocked } });
+});
