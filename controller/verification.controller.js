@@ -24,6 +24,18 @@ const FRAUDULENT_STATUSES = new Set([
   "reported",
 ]);
 
+export const normalizeAdminVerificationStatus = (rawStatus) => {
+  const status = String(rawStatus ?? "").trim().toLowerCase();
+  if (!status || status === "verified") return "verified";
+  if (status === "fraud" || status === "fraudulent") {
+    return "fraudulent";
+  }
+  throw new AppError(
+    httpStatus.BAD_REQUEST,
+    'Status must be either "verified" or "fraudulent"'
+  );
+};
+
 const escapeRegExp = (value) =>
   value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
@@ -316,7 +328,7 @@ export const createVerification = catchAsync(async (req, res) => {
     phone: phone || "",
     account: account || "",
     website: website || "",
-    status: status || "verified",
+    status: normalizeAdminVerificationStatus(status),
     source: "manual",
   });
 
@@ -341,7 +353,9 @@ export const updateVerification = catchAsync(async (req, res) => {
   if (phone !== undefined) record.phone = phone;
   if (account !== undefined) record.account = account;
   if (website !== undefined) record.website = website;
-  if (status !== undefined) record.status = status;
+  if (status !== undefined) {
+    record.status = normalizeAdminVerificationStatus(status);
+  }
 
   await record.save();
 
@@ -393,6 +407,9 @@ export const uploadVerificationCSV = catchAsync(async (req, res) => {
   const phoneIdx = headers.findIndex((h) => h.includes("phone") || h.includes("mobile") || h.includes("tel"));
   const accountIdx = headers.findIndex((h) => h.includes("account") || h.includes("acc"));
   const websiteIdx = headers.findIndex((h) => h.includes("web") || h.includes("site") || h.includes("url"));
+  const statusIdx = headers.findIndex(
+    (h) => h === "status" || h === "verificationstatus"
+  );
 
   if (emailIdx === -1 && phoneIdx === -1 && accountIdx === -1 && websiteIdx === -1) {
     throw new AppError(
@@ -408,16 +425,27 @@ export const uploadVerificationCSV = catchAsync(async (req, res) => {
     const phone = phoneIdx !== -1 ? (row[phoneIdx] || "").trim() : "";
     const account = accountIdx !== -1 ? (row[accountIdx] || "").trim() : "";
     const website = websiteIdx !== -1 ? (row[websiteIdx] || "").trim() : "";
+    const rawStatus = statusIdx !== -1 ? (row[statusIdx] || "").trim() : "";
 
     // Skip completely empty rows
     if (!email && !phone && !account && !website) continue;
+
+    let status;
+    try {
+      status = normalizeAdminVerificationStatus(rawStatus);
+    } catch {
+      throw new AppError(
+        httpStatus.BAD_REQUEST,
+        `Invalid status on CSV row ${i + 1}. Use "verified" or "fraudulent".`
+      );
+    }
 
     recordsToInsert.push({
       email,
       phone,
       account,
       website,
-      status: "verified",
+      status,
       source: "csv",
     });
   }

@@ -24,6 +24,9 @@ const verificationSchema = new Schema(
     },
     status: {
       type: String,
+      enum: ["verified", "fraudulent"],
+      lowercase: true,
+      trim: true,
       default: "verified",
     },
     source: {
