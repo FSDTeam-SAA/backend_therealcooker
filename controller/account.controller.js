@@ -18,6 +18,7 @@ import { emitToUser } from "../utils/socket.js";
 
 const hashOtp = (otp) => crypto.createHash("sha256").update(otp).digest("hex");
 const OTP_WINDOW_MS = 90 * 1000;
+const LIVE_LOCATION_SHARE_WINDOW_MS = 30 * 60 * 1000;
 
 const uploadedFileUrl = async (req) => {
   if (!req.file) return "";
@@ -77,7 +78,16 @@ const parseEmergencyLocation = (value) => {
   if (!value || typeof value !== "object") return null;
   const latitude = Number(value.latitude);
   const longitude = Number(value.longitude);
-  if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return null;
+  if (
+    !Number.isFinite(latitude) ||
+    !Number.isFinite(longitude) ||
+    latitude < -90 ||
+    latitude > 90 ||
+    longitude < -180 ||
+    longitude > 180
+  ) {
+    return null;
+  }
   return { latitude, longitude };
 };
 
@@ -616,6 +626,10 @@ export const activateEmergencyMode = catchAsync(async (req, res) => {
 // there's no session id in the payload for it to act on.
 export const alertGuardian = catchAsync(async (req, res) => {
   const eventLocation = parseEmergencyLocation(req.body?.eventLocation);
+  const liveLocationShareId = crypto.randomUUID();
+  const liveLocationExpiresAt = new Date(
+    Date.now() + LIVE_LOCATION_SHARE_WINDOW_MS
+  );
   const guardianUsers = await findAcceptedGuardianUsers(req.user._id, {
     primaryOnly: false,
   });
@@ -630,6 +644,8 @@ export const alertGuardian = catchAsync(async (req, res) => {
   const payload = {
     eventLocation,
     lastKnownLocation: eventLocation,
+    liveLocationShareId,
+    liveLocationExpiresAt,
     user: {
       id: req.user._id,
       name: req.user.name,
@@ -661,6 +677,197 @@ export const alertGuardian = catchAsync(async (req, res) => {
     statusCode: httpStatus.OK,
     success: true,
     message: "All guardians have been alerted",
+    data: payload,
+  });
+});
+
+export const updateEmergencyLocation = catchAsync(async (req, res) => {
+  const lastKnownLocation = parseEmergencyLocation(
+    req.body?.lastKnownLocation ?? req.body
+  );
+  if (!lastKnownLocation) {
+    throw new AppError(
+      httpStatus.BAD_REQUEST,
+      "A valid latitude and longitude are required"
+    );
+  }
+
+  const alertType = req.body?.alertType;
+  const now = new Date();
+  let session = null;
+  let liveLocationShareId = null;
+  let recipientIds = [];
+
+  if (alertType === "emergency") {
+    const sessionId = req.body?.sessionId;
+    session = sessionId
+      ? await EmergencySession.findOne({
+          _id: sessionId,
+          user: req.user._id,
+          status: "active",
+        })
+      : await findActiveEmergencySession(req.user._id);
+
+    if (!session) {
+      throw new AppError(
+        httpStatus.NOT_FOUND,
+        "Active emergency mode not found"
+      );
+    }
+
+    session.lastKnownLocation = lastKnownLocation;
+    await session.save();
+
+    const guardianUsers = await findAcceptedGuardianUsers(req.user._id);
+    recipientIds = guardianUsers.map(({ protectorUser }) => protectorUser._id);
+
+    await Notification.updateMany(
+      { type: "sos_emergency_active", "data.id": session._id },
+      {
+        $set: {
+          "data.lastKnownLocation": lastKnownLocation,
+          "data.lastKnownLocationUpdatedAt": now,
+        },
+      }
+    );
+  } else if (alertType === "guardian_alert") {
+    liveLocationShareId = req.body?.liveLocationShareId?.toString().trim();
+    if (!liveLocationShareId) {
+      throw new AppError(
+        httpStatus.BAD_REQUEST,
+        "A live location share ID is required"
+      );
+    }
+
+    const notificationFilter = {
+      sender: req.user._id,
+      type: "guardian_alert",
+      "data.liveLocationShareId": liveLocationShareId,
+      createdAt: {
+        $gte: new Date(Date.now() - LIVE_LOCATION_SHARE_WINDOW_MS),
+      },
+    };
+    const liveNotifications = await Notification.find(
+      notificationFilter
+    ).select("recipient");
+    if (liveNotifications.length === 0) {
+      throw new AppError(
+        httpStatus.NOT_FOUND,
+        "Live guardian location sharing has expired"
+      );
+    }
+
+    recipientIds = liveNotifications.map(
+      (notification) => notification.recipient
+    );
+    await Notification.updateMany(notificationFilter, {
+      $set: {
+        "data.lastKnownLocation": lastKnownLocation,
+        "data.lastKnownLocationUpdatedAt": now,
+      },
+    });
+  } else {
+    throw new AppError(
+      httpStatus.BAD_REQUEST,
+      'Alert type must be "emergency" or "guardian_alert"'
+    );
+  }
+
+  await User.findByIdAndUpdate(req.user._id, {
+    $set: { location: lastKnownLocation },
+  });
+
+  const payload = {
+    id: session?._id || null,
+    userId: req.user._id,
+    alertType,
+    liveLocationShareId,
+    lastKnownLocation,
+    updatedAt: now,
+  };
+
+  const uniqueRecipientIds = new Set(recipientIds.map(String));
+  uniqueRecipientIds.forEach((recipientId) =>
+    emitToUser(recipientId, "emergency:location", payload)
+  );
+  emitToUser(req.user._id, "emergency:location", payload);
+
+  sendResponse(res, {
+    statusCode: httpStatus.OK,
+    success: true,
+    message: "Live location updated",
+    data: payload,
+  });
+});
+
+export const getEmergencyLocation = catchAsync(async (req, res) => {
+  const sessionId = req.query?.sessionId?.toString().trim();
+  const liveLocationShareId = req.query?.liveLocationShareId
+    ?.toString()
+    .trim();
+  let payload = null;
+
+  if (sessionId) {
+    const session = await EmergencySession.findById(sessionId);
+    if (!session) {
+      throw new AppError(httpStatus.NOT_FOUND, "Emergency alert not found");
+    }
+
+    const isOwner = String(session.user) === String(req.user._id);
+    const guardian = isOwner
+      ? null
+      : await findPrimaryGuardianOverride(session.user, req.user);
+    if (!isOwner && !guardian) {
+      throw new AppError(
+        httpStatus.FORBIDDEN,
+        "You cannot view this emergency location"
+      );
+    }
+
+    payload = {
+      id: session._id,
+      userId: session.user,
+      alertType: "emergency",
+      lastKnownLocation: session.lastKnownLocation || session.eventLocation,
+      updatedAt: session.updatedAt,
+    };
+  } else if (liveLocationShareId) {
+    const notification = await Notification.findOne({
+      recipient: req.user._id,
+      type: "guardian_alert",
+      "data.liveLocationShareId": liveLocationShareId,
+      createdAt: {
+        $gte: new Date(Date.now() - LIVE_LOCATION_SHARE_WINDOW_MS),
+      },
+    });
+    if (!notification) {
+      throw new AppError(
+        httpStatus.NOT_FOUND,
+        "Live guardian location sharing has expired"
+      );
+    }
+
+    payload = {
+      id: null,
+      userId: notification.data?.user?.id || notification.sender,
+      alertType: "guardian_alert",
+      liveLocationShareId,
+      lastKnownLocation: notification.data?.lastKnownLocation || null,
+      updatedAt:
+        notification.data?.lastKnownLocationUpdatedAt ||
+        notification.updatedAt,
+    };
+  } else {
+    throw new AppError(
+      httpStatus.BAD_REQUEST,
+      "An emergency session or live location share ID is required"
+    );
+  }
+
+  sendResponse(res, {
+    statusCode: httpStatus.OK,
+    success: true,
+    message: "Latest emergency location fetched",
     data: payload,
   });
 });

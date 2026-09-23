@@ -6,6 +6,8 @@ import {
   getEmergencyStatus,
   activateEmergencyMode,
   alertGuardian,
+  updateEmergencyLocation,
+  getEmergencyLocation,
   sendEmergencyClearUserOtp,
   verifyEmergencyClearUserOtp,
   clearEmergencyByPrimaryGuardian,
@@ -33,6 +35,8 @@ router.route("/")
 router.get("/emergency/status", getEmergencyStatus);
 router.post("/emergency/activate", activateEmergencyMode);
 router.post("/emergency/alert-guardian", alertGuardian);
+router.get("/emergency/location", getEmergencyLocation);
+router.patch("/emergency/location", updateEmergencyLocation);
 router.post("/emergency/clear/send-user-otp", sendEmergencyClearUserOtp);
 router.post("/emergency/clear/verify-user-otp", verifyEmergencyClearUserOtp);
 router.post(

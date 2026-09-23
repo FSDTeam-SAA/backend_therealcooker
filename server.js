@@ -8,7 +8,9 @@ import { fileURLToPath } from "url";
 import router from "./mainroute/index.js";
 import { createServer } from "http";
 import { Server } from "socket.io";
+import jwt from "jsonwebtoken";
 import { notificationRoom, setSocketServer } from "./utils/socket.js";
+import { User } from "./model/user.model.js";
 
 import globalErrorHandler from "./middleware/globalErrorHandler.js";
 import notFound from "./middleware/notFound.js";
@@ -27,6 +29,24 @@ export const io = new Server(server, {
   },
 });
 setSocketServer(io);
+
+io.use(async (socket, next) => {
+  try {
+    const token = socket.handshake.auth?.token;
+    if (!token) return next(new Error("Unauthorized"));
+
+    const decoded = jwt.verify(token, process.env.JWT_ACCESS_SECRET);
+    const user = await User.findById(decoded._id).select("_id");
+    if (!user || !(await User.isOTPVerified(user._id))) {
+      return next(new Error("Unauthorized"));
+    }
+
+    socket.data.userId = user._id.toString();
+    next();
+  } catch {
+    next(new Error("Unauthorized"));
+  }
+});
 
 // Track active sockets to force-close them on restart
 const activeSockets = new Set();
@@ -75,16 +95,22 @@ io.on("connection", (socket) => {
   console.log("A client connected:", socket.id);
 
   socket.on("joinChatRoom", (userId) => {
-    if (userId) {
-      socket.join(`chat_${userId}`);
-      console.log(`Client ${socket.id} joined user room: ${userId}`);
+    const authenticatedUserId = socket.data.userId;
+    if (authenticatedUserId && String(userId) === authenticatedUserId) {
+      socket.join(`chat_${authenticatedUserId}`);
+      console.log(
+        `Client ${socket.id} joined user room: ${authenticatedUserId}`
+      );
     }
   });
 
   socket.on("joinNotificationRoom", (userId) => {
-    if (userId) {
-      socket.join(notificationRoom(userId));
-      console.log(`Client ${socket.id} joined notification room: ${userId}`);
+    const authenticatedUserId = socket.data.userId;
+    if (authenticatedUserId && String(userId) === authenticatedUserId) {
+      socket.join(notificationRoom(authenticatedUserId));
+      console.log(
+        `Client ${socket.id} joined notification room: ${authenticatedUserId}`
+      );
     }
   });
 
