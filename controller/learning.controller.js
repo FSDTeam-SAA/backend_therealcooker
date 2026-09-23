@@ -135,3 +135,79 @@ export const getLearningById = catchAsync(async (req, res) => {
     data: learning,
   });
 });
+
+const publicImageUrl = (req, rawUrl) => {
+  if (!rawUrl) return "";
+  if (/^https?:\/\//i.test(rawUrl)) return rawUrl;
+  const path = rawUrl.startsWith("/") ? rawUrl : `/${rawUrl}`;
+  return `${req.protocol}://${req.get("host")}${path}`;
+};
+
+export const toPublicLearningDto = (learning, req) => {
+  const item = learning?.toObject ? learning.toObject() : learning;
+  return {
+    id: String(item._id),
+    title: item.title,
+    image_url: publicImageUrl(req, item.image?.url),
+    summary: item.description,
+    content: item.description,
+    author: item.author?.name ?? "",
+    created_at: item.createdAt,
+    updated_at: item.updatedAt,
+  };
+};
+
+// Public mobile feed. Kept separate from getLearnings so the existing admin
+// list and its response shape continue to work unchanged.
+export const getPublishedLearnings = catchAsync(async (req, res) => {
+  const { search, page: rawPage, limit: rawLimit } = req.query;
+  const filter = { isPublished: true };
+  if (search?.trim()) {
+    filter.$or = [
+      { title: { $regex: search.trim(), $options: "i" } },
+      { description: { $regex: search.trim(), $options: "i" } },
+    ];
+  }
+
+  const page = Math.max(1, Number.parseInt(rawPage, 10) || 1);
+  const limit = Math.max(1, Math.min(100, Number.parseInt(rawLimit, 10) || 20));
+  const skip = (page - 1) * limit;
+  const [total, learnings] = await Promise.all([
+    Learning.countDocuments(filter),
+    Learning.find(filter)
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(limit)
+      .populate("author", "name"),
+  ]);
+
+  return res.status(httpStatus.OK).json({
+    success: true,
+    message: "Learning materials fetched successfully",
+    data: learnings.map((learning) => toPublicLearningDto(learning, req)),
+    pagination: {
+      page,
+      limit,
+      total,
+      totalPages: Math.ceil(total / limit) || 1,
+    },
+  });
+});
+
+export const getPublishedLearningById = catchAsync(async (req, res) => {
+  const learning = await Learning.findOne({
+    _id: req.params.id,
+    isPublished: true,
+  }).populate("author", "name");
+
+  if (!learning) {
+    throw new AppError(httpStatus.NOT_FOUND, "Learning material not found");
+  }
+
+  sendResponse(res, {
+    statusCode: httpStatus.OK,
+    success: true,
+    message: "Learning material fetched successfully",
+    data: toPublicLearningDto(learning, req),
+  });
+});

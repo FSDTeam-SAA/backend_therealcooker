@@ -1,5 +1,6 @@
 import express from "express";
 import {
+  checkVerification,
   createVerification,
   deleteVerification,
   getVerifications,
@@ -11,7 +12,10 @@ import { uploadCSVFile } from "../middleware/multer.middleware.js";
 
 const router = express.Router();
 
-// Routes can be used by admin
+// Public lookup must be registered before the admin middleware.
+router.post("/check", checkVerification);
+
+// Management routes can only be used by admins.
 router.use(protect);
 router.use(isAdmin);
 

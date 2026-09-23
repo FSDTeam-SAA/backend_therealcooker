@@ -4,6 +4,213 @@ import httpStatus from "http-status";
 import sendResponse from "../utils/sendResponse.js";
 import { Verification } from "../model/verification.model.js";
 
+const LOOKUP_TYPES = new Set(["email", "phone", "account", "website"]);
+const VERIFIED_STATUSES = new Set([
+  "verified",
+  "valid",
+  "trusted",
+  "safe",
+  "approved",
+]);
+const FRAUDULENT_STATUSES = new Set([
+  "fraud",
+  "fraudulent",
+  "blacklisted",
+  "flagged",
+  "scam",
+  "unsafe",
+  "blocked",
+  "suspicious",
+  "reported",
+]);
+
+const escapeRegExp = (value) =>
+  value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+export const detectVerificationType = (rawValue) => {
+  const value = String(rawValue ?? "").trim();
+  if (value.includes("@")) return "email";
+  if (
+    /^(?:https?:\/\/|www\.)/i.test(value) ||
+    /^[^\s]+\.[a-z]{2,}(?:[/?#]|$)/i.test(value)
+  ) {
+    return "website";
+  }
+
+  const digits = value.replace(/\D/g, "");
+  if (
+    digits.length >= 7 &&
+    digits.length <= 15 &&
+    /^[+\d\s().-]+$/.test(value)
+  ) {
+    return "phone";
+  }
+  return "account";
+};
+
+export const normalizeVerificationValue = (rawValue, type) => {
+  const value = String(rawValue ?? "").trim();
+
+  switch (type) {
+    case "email":
+      return value.toLowerCase();
+    case "phone":
+      return value.replace(/\D/g, "");
+    case "account":
+      return value.toLowerCase().replace(/[\s-]+/g, "");
+    case "website": {
+      if (!value) return "";
+      try {
+        const parsed = new URL(
+          /^(?:https?:)?\/\//i.test(value) ? value : `https://${value}`
+        );
+        const host = parsed.hostname.toLowerCase().replace(/^www\./, "");
+        const path = parsed.pathname.replace(/\/+$/, "");
+        return `${host}${path}`;
+      } catch {
+        return value
+          .toLowerCase()
+          .replace(/^(?:https?:\/\/)?(?:www\.)?/, "")
+          .replace(/[/?#]+$/, "");
+      }
+    }
+    default:
+      return value;
+  }
+};
+
+export const normalizeVerificationStatus = (rawStatus) => {
+  const status = String(rawStatus ?? "").trim().toLowerCase();
+  if (VERIFIED_STATUSES.has(status)) return "verified";
+  if (
+    FRAUDULENT_STATUSES.has(status) ||
+    /fraud|scam|flag|blacklist|unsafe|suspicious|blocked|reported/.test(status)
+  ) {
+    return "fraudulent";
+  }
+
+  // A record that is present but does not carry an explicitly trusted status
+  // must never be presented to the user as verified.
+  return "fraudulent";
+};
+
+export const buildVerificationLookupFilter = (type, normalizedValue) => {
+  if (type === "email") {
+    return { email: new RegExp(`^${escapeRegExp(normalizedValue)}$`, "i") };
+  }
+
+  if (type === "website") {
+    return {
+      website: new RegExp(
+        `^(?:https?:\\/\\/)?(?:www\\.)?${escapeRegExp(normalizedValue)}\\/?(?:[?#].*)?$`,
+        "i"
+      ),
+    };
+  }
+
+  const separator = type === "phone" ? "[\\s().+-]*" : "[\\s-]*";
+  const characters = [...normalizedValue]
+    .map((character) => escapeRegExp(character))
+    .join(separator);
+  return { [type]: new RegExp(`^${separator}${characters}${separator}$`, "i") };
+};
+
+const validateLookupValue = (value, type, rawValue) => {
+  const raw = String(rawValue ?? "").trim();
+  if (raw.length > 2048) {
+    throw new AppError(
+      httpStatus.BAD_REQUEST,
+      "The verification value is too long"
+    );
+  }
+  if (!value) {
+    throw new AppError(
+      httpStatus.BAD_REQUEST,
+      "A value is required to run a verification check"
+    );
+  }
+  if (type === "email" && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)) {
+    throw new AppError(httpStatus.BAD_REQUEST, "Enter a valid email address");
+  }
+  if (type === "phone" && !/^\d{7,15}$/.test(value)) {
+    throw new AppError(httpStatus.BAD_REQUEST, "Enter a valid phone number");
+  }
+  if (type === "phone" && !/^[+\d\s().-]+$/.test(raw)) {
+    throw new AppError(httpStatus.BAD_REQUEST, "Enter a valid phone number");
+  }
+  if (type === "website" && !/^[^\s.]+(?:\.[^\s.]+)+(?:\/.*)?$/.test(value)) {
+    throw new AppError(httpStatus.BAD_REQUEST, "Enter a valid website address");
+  }
+};
+
+// Public: check a single email, phone, account number, or website against the
+// records maintained by admins. The endpoint intentionally returns HTTP 200
+// for all three verdicts so a clean "not found" result is not treated as a
+// transport error by mobile clients.
+export const checkVerification = catchAsync(async (req, res) => {
+  const rawValue = req.body?.value ?? req.query?.value ?? req.query?.query;
+  const requestedType = String(req.body?.type ?? req.query?.type ?? "")
+    .trim()
+    .toLowerCase();
+  const type = requestedType || detectVerificationType(rawValue);
+
+  if (!LOOKUP_TYPES.has(type)) {
+    throw new AppError(
+      httpStatus.BAD_REQUEST,
+      "Type must be one of: email, phone, account, website"
+    );
+  }
+
+  const normalizedValue = normalizeVerificationValue(rawValue, type);
+  validateLookupValue(normalizedValue, type, rawValue);
+
+  const record = await Verification.findOne(
+    buildVerificationLookupFilter(type, normalizedValue)
+  )
+    .sort({ createdAt: -1 })
+    .lean();
+
+  if (!record) {
+    const message =
+      "No record found for this information in our database. Exercise caution.";
+    return res.status(httpStatus.OK).json({
+      success: true,
+      status: "not_found",
+      message,
+      data: {
+        status: "not_found",
+        type,
+        value: normalizedValue,
+        details: null,
+        message,
+      },
+    });
+  }
+
+  const status = normalizeVerificationStatus(record.status);
+  const message =
+    status === "verified"
+      ? "This entity is verified."
+      : "Warning: Flagged as fraudulent.";
+
+  return res.status(httpStatus.OK).json({
+    success: true,
+    status,
+    message,
+    data: {
+      status,
+      type,
+      value: normalizedValue,
+      message,
+      details: {
+        type,
+        value: normalizeVerificationValue(record[type], type),
+        recordedAt: record.createdAt,
+      },
+    },
+  });
+});
+
 // Helper: robust CSV string parser handling quotes and commas
 function parseCSV(content) {
   const lines = [];
