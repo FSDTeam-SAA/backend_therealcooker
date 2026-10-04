@@ -2,22 +2,24 @@ import jwt from "jsonwebtoken";
 import httpStatus from "http-status";
 import AppError from "../errors/AppError.js";
 import { User } from "./../model/user.model.js";
+import { isValidObjectId } from "mongoose";
 
 export const protect = async (req, res, next) => {
-  const token = req.headers.authorization?.split(" ")[1];
-  if (!token) throw new AppError(httpStatus.NOT_FOUND, "Token not found");
-
+  const authorization = req.headers.authorization;
+  const token = typeof authorization === "string" ? /^Bearer\s+(\S+)$/i.exec(authorization)?.[1] : undefined;
+  if (!token) throw new AppError(httpStatus.UNAUTHORIZED, "Please log in to continue");
+  let decoded;
   try {
-    const decoded = await jwt.verify(token, process.env.JWT_ACCESS_SECRET);
-    const user = await User.findById(decoded._id);
-    if (!user || !(await User.isOTPVerified(user._id))) {
-      throw new AppError(httpStatus.UNAUTHORIZED, "Unauthorized user");
-    }
-    req.user = user;
-    next();
+    decoded = jwt.verify(token, process.env.JWT_ACCESS_SECRET, { algorithms: ["HS256"] });
   } catch (err) {
-    throw new AppError(401, "Invalid token");
+    throw new AppError(httpStatus.UNAUTHORIZED, err.name === "TokenExpiredError" ? "Session expired. Please log in again." : "Invalid session. Please log in again.");
   }
+  if (!decoded || typeof decoded !== "object" || !isValidObjectId(decoded._id)) throw new AppError(httpStatus.UNAUTHORIZED, "Invalid session. Please log in again.");
+  // Database/service failures must remain server errors, not invalid-token errors.
+  const user = await User.findById(decoded._id);
+  if (!user || !user.verificationInfo?.verified || user.isBlocked) throw new AppError(httpStatus.UNAUTHORIZED, "Session is no longer valid. Please log in again.");
+  req.user = user;
+  next();
 };
 
 export const isAdmin = (req, res, next) => {

@@ -325,13 +325,18 @@ export const logout = catchAsync(async (req, res) => {
 });
 
 export const refreshToken = catchAsync(async (req, res) => {
-  const { refreshToken } = req.body;
+  const { refreshToken } = req.body || {};
   if (!refreshToken) {
     throw new AppError(httpStatus.UNAUTHORIZED, "Refresh token required");
   }
-  const decoded = verifyToken(refreshToken, process.env.JWT_REFRESH_SECRET);
+  let decoded;
+  try {
+    decoded = verifyToken(refreshToken, process.env.JWT_REFRESH_SECRET);
+  } catch {
+    throw new AppError(httpStatus.UNAUTHORIZED, "Invalid or expired refresh token");
+  }
   const user = await User.findById(decoded._id);
-  if (!user || user.refreshToken !== refreshToken) {
+  if (!user || user.refreshToken !== refreshToken || user.isBlocked || !user.verificationInfo?.verified) {
     throw new AppError(httpStatus.UNAUTHORIZED, "Invalid refresh token");
   }
   const jwtPayload = {

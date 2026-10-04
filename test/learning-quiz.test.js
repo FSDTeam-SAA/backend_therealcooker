@@ -110,12 +110,12 @@ test("routers deny anonymous quiz submissions and non-admin access to answer key
   const verified = User.isOTPVerified;
   const secret = process.env.JWT_ACCESS_SECRET;
   process.env.JWT_ACCESS_SECRET = "local-quiz-route-test";
-  User.findById = async () => ({ _id: userId, role: "user" });
+  User.findById = async () => ({ _id: userId, role: "user", verificationInfo: { verified: true } });
   User.isOTPVerified = async () => true;
   const token = jwt.sign({ _id: userId }, process.env.JWT_ACCESS_SECRET);
   const denied = (router, method, url, authorization) => new Promise(resolve => router.handle({ method, url, headers: authorization ? { authorization } : {} }, {}, resolve));
   try {
-    assert.equal((await denied(materialRouter, "POST", `/${learningId}/attempts`)).statusCode, 404);
+    assert.equal((await denied(materialRouter, "POST", `/${learningId}/attempts`)).statusCode, 401);
     assert.equal((await denied(learningRouter, "GET", "/", `Bearer ${token}`)).statusCode, 403);
     assert.equal((await denied(learningRouter, "GET", `/${learningId}`, `Bearer ${token}`)).statusCode, 403);
     assert.equal((await denied(adminRouter, "GET", `/learning-attempts/${learningId}`, `Bearer ${token}`)).statusCode, 403);
