@@ -4,10 +4,12 @@ import httpStatus from "http-status";
 import sendResponse from "../utils/sendResponse.js";
 import { Learning } from "../model/learning.model.js";
 import { uploadOnCloudinary } from "../utils/commonMethod.js";
+import { normalizeQuestions } from "../utils/learningQuiz.js";
 
 // Admin: Create learning item
 export const createLearning = catchAsync(async (req, res) => {
   const { title, description } = req.body;
+  const questions = normalizeQuestions(req.body.questions ?? []);
   if (!title || !description) {
     throw new AppError(httpStatus.BAD_REQUEST, "Title and description are required");
   }
@@ -23,6 +25,7 @@ export const createLearning = catchAsync(async (req, res) => {
     description,
     image,
     author: req.user?._id,
+    questions,
   });
 
   sendResponse(res, {
@@ -42,6 +45,14 @@ export const updateLearning = catchAsync(async (req, res) => {
   }
 
   const { title, description, isPublished } = req.body;
+  if (req.body.questions !== undefined) {
+    const questions = normalizeQuestions(req.body.questions);
+    const previous = normalizeQuestions(learning.questions?.map(q => q.toObject()) || []);
+    if (JSON.stringify(previous) !== JSON.stringify(questions)) {
+      learning.questions = questions;
+      learning.quizVersion = (learning.quizVersion || 1) + 1;
+    }
+  }
   if (title) learning.title = title;
   if (description) learning.description = description;
   if (isPublished !== undefined) learning.isPublished = isPublished;
@@ -154,6 +165,8 @@ export const toPublicLearningDto = (learning, req) => {
     author: item.author?.name ?? "",
     created_at: item.createdAt,
     updated_at: item.updatedAt,
+    mcq_count: item.questions?.length || 0,
+    quiz_version: item.quizVersion || 1,
   };
 };
 

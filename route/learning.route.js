@@ -11,13 +11,12 @@ import { upload } from "../middleware/multer.middleware.js";
 
 const router = express.Router();
 
-// Public routes
+// Full learning records include answer keys and are admin-only.
+router.use(protect, isAdmin);
 router.get("/", getLearnings);
 router.get("/:id", getLearningById);
 
 // Admin protected routes
-router.use(protect);
-router.use(isAdmin);
 
 router.post("/", upload.single("image"), createLearning);
 router.put("/:id", upload.single("image"), updateLearning);

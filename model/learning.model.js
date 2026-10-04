@@ -7,6 +7,16 @@ const learningSchema = new Schema(
       required: true,
       trim: true,
     },
+    questions: {
+      type: [new Schema({
+        question: { type: String, required: true, trim: true },
+        options: [{ id: { type: String, required: true }, text: { type: String, required: true, trim: true }, _id: false }],
+        correctOptionId: { type: String, required: true },
+        explanation: { type: String, default: "" },
+      })],
+      default: [],
+    },
+    quizVersion: { type: Number, default: 1 },
     description: {
       type: String,
       required: true,
