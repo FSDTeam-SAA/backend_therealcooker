@@ -6,6 +6,7 @@ import sendResponse from "../utils/sendResponse.js";
 import { Account } from "../model/account.model.js";
 import { AccountDeletionRequest } from "../model/accountDeletionRequest.model.js";
 import { EmergencySession } from "../model/emergencySession.model.js";
+import { recordAlert, recordEvent, resolveTrackedEmergency } from "../utils/operations.js";
 import { Guardian } from "../model/guardian.model.js";
 import { GuardianAccount } from "../model/guardianAccount.model.js";
 import { LimitIncreaseRequest } from "../model/limitIncreaseRequest.model.js";
@@ -259,6 +260,7 @@ const resolveEmergencySession = async ({
   session.userClearOtpHash = "";
   session.userClearOtpExpiresAt = undefined;
   await session.save();
+  await resolveTrackedEmergency(session, clearedByUser._id);
 
   // The original "sos_emergency_active" notifications/activities still carry
   // active: true from when they were sent. Patch them so tapping an old
@@ -338,6 +340,8 @@ const lockLimitRequest = async (limitRequest, reason) => {
   limitRequest.status = "locked";
   limitRequest.lockedAt = lockedAt;
   await limitRequest.save();
+  await recordAlert({ key: `lock:${limitRequest._id}`, type: "account_lock", severity: "high", title: "Accounts locked after limit verification failed", user: owner._id, entityId: String(limitRequest._id) });
+  await recordEvent({ kind: "protective_action", user: owner._id, actor: guardianUser._id, entityType: "limit_request", entityId: String(limitRequest._id), outcome: "accounts_locked", reason });
 
   const lockPayload = {
     requestId: limitRequest._id,
@@ -556,6 +560,9 @@ export const activateEmergencyMode = catchAsync(async (req, res) => {
     lockedAccounts: activeAccounts.map((account) => account._id),
     activatedAt: lockedAt,
   });
+  await recordAlert({ key: `sos:${session._id}`, type: "sos", severity: "critical", title: "SOS emergency activated", user: req.user._id, entityId: String(session._id) });
+  await recordEvent({ kind: "panic", user: req.user._id, actor: req.user._id, entityType: "emergency", entityId: String(session._id), outcome: "sos" });
+  if (activeAccounts.length) await recordEvent({ kind: "protective_action", user: req.user._id, actor: req.user._id, entityType: "emergency", entityId: String(session._id), outcome: "accounts_locked", reason: "SOS emergency mode activated" });
 
   const payload = {
     ...emergencySessionPayload(session),
@@ -640,6 +647,9 @@ export const alertGuardian = catchAsync(async (req, res) => {
       "No accepted guardians are linked to alert"
     );
   }
+
+  await recordAlert({ key: `guardian:${liveLocationShareId}`, type: "guardian_alert", severity: "high", title: "User requested guardian attention", user: req.user._id, entityId: liveLocationShareId });
+  await recordEvent({ kind: "panic", user: req.user._id, actor: req.user._id, entityType: "guardian_alert", entityId: liveLocationShareId, outcome: "guardian_alert" });
 
   const payload = {
     eventLocation,
@@ -1357,6 +1367,7 @@ export const simulateLimitIncrease = catchAsync(async (req, res) => {
   };
 
   if (isSuspicious) {
+    await recordAlert({ key: `limit:${limitRequest._id}`, type: "suspicious_limit", severity: "elevated", title: "Repeated transfer limit increase within 24 hours", user: req.user._id, entityId: String(limitRequest._id), source: "simulation" });
     // Another increase happened within the last 24 hours — hold off on
     // applying it until the guardian approves and the owner verifies the OTP.
     await Promise.all([

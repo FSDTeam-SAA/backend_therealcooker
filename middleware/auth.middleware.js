@@ -3,6 +3,7 @@ import httpStatus from "http-status";
 import AppError from "../errors/AppError.js";
 import { User } from "./../model/user.model.js";
 import { isValidObjectId } from "mongoose";
+import { can, routePermission } from "../utils/adminPermissions.js";
 
 export const protect = async (req, res, next) => {
   const authorization = req.headers.authorization;
@@ -26,6 +27,7 @@ export const isAdmin = (req, res, next) => {
   if (req.user?.role !== "admin") {
     throw new AppError(403, "Access denied. You are not an admin.");
   }
+  if (!can(req.user, routePermission(req))) throw new AppError(403, "Your admin role does not permit this action");
   next();
 };
 

@@ -6,6 +6,8 @@ import { Learning } from "../model/learning.model.js";
 import { LearningAttempt } from "../model/learning-attempt.model.js";
 import { User } from "../model/user.model.js";
 import { gradeAnswers } from "../utils/learningQuiz.js";
+import { LearningProgress } from "../model/operation.model.js";
+import { safelyTrack, recordEvent } from "../utils/operations.js";
 
 const validId = id => {
   if (!mongoose.isValidObjectId(id)) throw new AppError(400, "Invalid ID");
@@ -19,6 +21,10 @@ async function published(id) {
 }
 export const getQuiz = catchAsync(async (req, res) => {
   const learning = await published(req.params.id);
+  if (req.user) await safelyTrack(() => LearningProgress.updateOne(
+    { user: req.user._id, learning: learning._id, quizVersion: learning.quizVersion || 1 },
+    { $setOnInsert: { startedAt: new Date() } }, { upsert: true }
+  ));
   respond(res, { learningId: learning._id, quizVersion: learning.quizVersion || 1, questions: learning.questions.map(q => ({ _id: q._id, question: q.question, options: q.options.map(o => ({ id: o.id, text: o.text })) })) });
 });
 export const submitAttempt = catchAsync(async (req, res) => {
@@ -26,6 +32,17 @@ export const submitAttempt = catchAsync(async (req, res) => {
   if (req.body.quizVersion !== (learning.quizVersion || 1)) throw new AppError(409, "Quiz changed. Reload the quiz before submitting");
   const answers = gradeAnswers(learning.questions, req.body.answers);
   const attempt = await LearningAttempt.create({ user: req.user._id, learning: learning._id, learningTitle: learning.title, quizVersion: learning.quizVersion || 1, answers, score: answers.filter(a => a.isCorrect).length, totalQuestions: answers.length });
+  await safelyTrack(async () => {
+    const filter = { user: req.user._id, learning: learning._id, quizVersion: learning.quizVersion || 1 };
+    const progress = await LearningProgress.findOne(filter);
+    // Completion duration exists only when a quiz start was recorded; never invent a duration.
+    if (progress) {
+      if (progress.completedAt) progress.additionalQuestions += answers.length;
+      else { progress.completedAt = new Date(); progress.durationMs = progress.completedAt - progress.startedAt; }
+      progress.attempts += 1; await progress.save();
+    }
+  });
+  await recordEvent({ kind: "learning_completed", user: req.user._id, entityType: "learning", entityId: String(learning._id), outcome: "quiz_submitted" });
   respond(res, attempt, 201);
 });
 const escapeRegex = value => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");

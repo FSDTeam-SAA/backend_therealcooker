@@ -14,6 +14,8 @@ import { User } from "./model/user.model.js";
 
 import globalErrorHandler from "./middleware/globalErrorHandler.js";
 import notFound from "./middleware/notFound.js";
+import { operationalTracking } from "./middleware/operationalTracking.js";
+import { startAvailabilityMonitor } from "./utils/availability.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -36,8 +38,8 @@ io.use(async (socket, next) => {
     if (!token) return next(new Error("Unauthorized"));
 
     const decoded = jwt.verify(token, process.env.JWT_ACCESS_SECRET);
-    const user = await User.findById(decoded._id).select("_id");
-    if (!user || !(await User.isOTPVerified(user._id))) {
+    const user = await User.findById(decoded._id).select("_id isBlocked");
+    if (!user || user.isBlocked || !(await User.isOTPVerified(user._id))) {
       return next(new Error("Unauthorized"));
     }
 
@@ -81,6 +83,7 @@ app.use(cookieParser());
 app.use("/uploads", express.static(path.join(__dirname, "public/uploads")));
 
 // Mount the main router
+app.use(operationalTracking);
 app.use("/api/v1", router);
 
 // Basic route for testing
@@ -129,6 +132,7 @@ const PORT = process.env.PORT || 5011;
 const startServer = async () => {
   try {
     await mongoose.connect(process.env.MONGO_URI);
+    startAvailabilityMonitor();
     console.log("MongoDB connected");
 
     // ONLY call server.listen ONCE here:

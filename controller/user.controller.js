@@ -4,6 +4,8 @@ import { uploadOnCloudinary } from "../utils/commonMethod.js";
 import AppError from "../errors/AppError.js";
 import sendResponse from "../utils/sendResponse.js";
 import catchAsync from "../utils/catchAsync.js";
+import { Account } from "../model/account.model.js";
+import { dateFilter, escapeRegex, pageOptions } from "../utils/reporting.js";
 
 const parsePagination = (query) => {
   const page = Math.max(Number(query.page) || 1, 1);
@@ -64,7 +66,7 @@ export const getProfile = catchAsync(async (req, res) => {
 
 // Update profile
 export const updateProfile = catchAsync(async (req, res) => {
-  const { name, phone, bio, gender, dob, age, address } = req.body;
+  const { name, phone, bio, gender, dob, address, profession, country, city } = req.body;
 
   const userId = req.user._id;
 
@@ -82,7 +84,7 @@ export const updateProfile = catchAsync(async (req, res) => {
   if (bio !== undefined) user.bio = bio;
   if (gender !== undefined) user.gender = gender;
   if (dob !== undefined) user.dob = dob;
-  if (age !== undefined) user.age = age;
+  for (const [key, value] of Object.entries({ profession, country, city })) if (value !== undefined) user[key] = value;
   if (address !== undefined) user.address = address;
 
   if (req.file) {
@@ -127,7 +129,6 @@ export const changePassword = catchAsync(async (req, res) => {
   }
 
   user.password = newPassword;
-  user.textPassword = newPassword;
   await user.save();
 
   sendResponse(res, {
@@ -187,7 +188,6 @@ export const createUserByAdmin = catchAsync(async (req, res) => {
     name,
     userId,
     password,
-    textPassword: password,
     location: {
       latitude: parsedLatitude,
       longitude: parsedLongitude,
@@ -219,22 +219,29 @@ export const createUserByAdmin = catchAsync(async (req, res) => {
 });
 
 export const getUsersForAdmin = catchAsync(async (req, res) => {
-  const { page, limit, skip } = parsePagination(req.query);
+  const { page, limit, skip } = pageOptions(req.query);
   const searchTerm = req.query.search?.trim();
 
-  const filter = { role: { $ne: "admin" } };
+  const filter = { role: "user", ...dateFilter(req.query) };
+  if (req.query.user) filter._id = req.query.user;
+  if (req.query.verified === "true") filter["verificationInfo.verified"] = true;
+  if (req.query.kyc === "completed") filter["kyc.status"] = "completed";
+  if (req.query.bank || req.query.linked === "true") {
+    filter._id = { $in: await Account.distinct("user", { isActive: true, ...(req.query.bank ? { bankName: req.query.bank } : { accountType: "bank" }) }) };
+  }
 
   if (searchTerm) {
     filter.$or = [
-      { name: { $regex: searchTerm, $options: "i" } },
-      { userId: { $regex: searchTerm, $options: "i" } },
+      { name: { $regex: escapeRegex(searchTerm), $options: "i" } },
+      { userId: { $regex: escapeRegex(searchTerm), $options: "i" } },
+      { email: { $regex: escapeRegex(searchTerm), $options: "i" } },
     ];
   }
 
   const [users, total] = await Promise.all([
     User.find(filter)
       .select(
-        "-password -refreshToken -verificationInfo -password_reset_token -__v +textPassword",
+        "name email phone userId dob profession country city isBlocked verificationInfo.verified kyc.status createdAt",
       )
       .sort({ createdAt: -1 })
       .skip(skip)
@@ -261,8 +268,8 @@ export const getUsersForAdmin = catchAsync(async (req, res) => {
 export const getUserDetailsForAdmin = catchAsync(async (req, res) => {
   const { id } = req.params;
 
-  const user = await User.findById(id).select(
-    "-password -refreshToken -verificationInfo -password_reset_token -__v +textPassword",
+  const user = await User.findOne({ _id: id, role: "user" }).select(
+    "name email phone userId dob profession country city isBlocked verificationInfo.verified kyc.status createdAt",
   );
 
   if (!user) {
@@ -284,7 +291,7 @@ export const updateUserByAdmin = catchAsync(async (req, res) => {
   const { name, userId, password, latitude, longitude, defaultRadius } =
     req.body;
 
-  const user = await User.findById(id);
+  const user = await User.findOne({ _id: id, role: "user" });
 
   if (!user) {
     throw new AppError(httpStatus.NOT_FOUND, "User not found");
@@ -301,7 +308,6 @@ export const updateUserByAdmin = catchAsync(async (req, res) => {
   if (name) user.name = name;
   if (password) {
     user.password = password;
-    user.textPassword = password;
   }
   if (defaultRadius !== undefined) {
     user.defaultRadius = parseRadius(defaultRadius);
@@ -354,13 +360,13 @@ export const updateUserByAdmin = catchAsync(async (req, res) => {
 export const deleteUserByAdmin = catchAsync(async (req, res) => {
   const { id } = req.params;
 
-  const user = await User.findById(id);
+  const user = await User.findOne({ _id: id, role: "user" });
 
   if (!user) {
     throw new AppError(httpStatus.NOT_FOUND, "User not found");
   }
 
-  await User.findByIdAndDelete(id);
+  await User.findOneAndDelete({ _id: id, role: "user" });
 
   sendResponse(res, {
     statusCode: httpStatus.OK,

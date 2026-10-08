@@ -52,6 +52,8 @@ const toAuthResponse = (user, accessToken, extra = {}) => {
   const userObj = user.toObject();
   delete userObj.googleId;
   userObj.accessToken = accessToken;
+  // Only token issuance responses may return the refresh token to the authenticating client.
+  userObj.refreshToken = user.refreshToken;
   return Object.assign(userObj, extra);
 };
 
@@ -110,7 +112,6 @@ export const register = catchAsync(async (req, res) => {
     user.name = name;
     user.phone = phone;
     user.password = password;
-    user.textPassword = password;
     user.verificationInfo.token = otp;
     if (userId) user.userId = userId;
     if (location) user.location = location;
@@ -122,7 +123,6 @@ export const register = catchAsync(async (req, res) => {
       email,
       phone,
       password,
-      textPassword: password,
       verificationInfo: { token: otp, verified: false },
       location,
     });
@@ -410,7 +410,6 @@ export const resetPassword = catchAsync(async (req, res) => {
     throw new AppError(httpStatus.BAD_REQUEST, "Invalid OTP");
   }
   user.password = newPassword;
-  user.textPassword = newPassword;
   user.password_reset_token = "";
   await user.save();
 
@@ -434,7 +433,6 @@ export const changePassword = catchAsync(async (req, res) => {
     throw new AppError(httpStatus.BAD_REQUEST, "Passwords do not match");
   }
   user.password = newPassword;
-  user.textPassword = newPassword;
   await user.save();
 
   sendResponse(res, {

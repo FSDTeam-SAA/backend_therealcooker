@@ -8,7 +8,10 @@ const userSchema = new Schema(
     googleId: { type: String, unique: true, sparse: true, select: 0 },
     userId: { type: String, unique: true, sparse: true, trim: true },
     password: { type: String, select: 0, required: true },
-    textPassword: { type: String, select: 0, default: "" },
+    adminRole: { type: String, enum: ["superadmin", "operations", "support", "analyst"], default: "superadmin" },
+    profession: { type: String, trim: true, maxlength: 120 },
+    country: { type: String, trim: true, maxlength: 80 },
+    city: { type: String, trim: true, maxlength: 120 },
     username: { type: String },
     phone: { type: String },
     bio: { type: String, default: "" },
@@ -77,6 +80,17 @@ userSchema.pre("save", async function (next) {
   }
   next();
 });
+
+// Defense in depth, including documents loaded with +password for authentication.
+const sanitizeUser = (_doc, value) => {
+  for (const key of ["password", "textPassword", "refreshToken", "password_reset_token", "googleId"]) delete value[key];
+  if (value.verificationInfo) value.verificationInfo = { verified: Boolean(value.verificationInfo.verified) };
+  if (value.kyc) delete value.kyc.raw;
+  if (value.role !== "admin") delete value.adminRole;
+  return value;
+};
+userSchema.set("toJSON", { transform: sanitizeUser });
+userSchema.set("toObject", { transform: sanitizeUser });
 
 userSchema.statics.isUserExistsByEmail = async function (email) {
   return await this.findOne({ email }).select("+password");

@@ -7,10 +7,26 @@ import {
   setUserBlocked,
 } from "../controller/admin.controller.js";
 import { protect, isAdmin } from "../middleware/auth.middleware.js";
+import { getOverview, getAdminIdentity, listAlerts, updateAlert, listCases, createCase, updateCase, listEvents, listAudit, listAccounts, getOperationalUser, listOperators, listStaff, updateStaffRole, getHealth } from "../controller/operations.controller.js";
 
 const router = express.Router();
 
 router.use(protect, isAdmin);
+router.get("/me", getAdminIdentity);
+router.get("/dashboard/overview", getOverview);
+router.get("/alerts", listAlerts);
+router.patch("/alerts/:id", updateAlert);
+router.get("/cases/operators", listOperators);
+router.get("/cases", listCases);
+router.post("/cases", createCase);
+router.patch("/cases/:id", updateCase);
+router.get("/events", listEvents);
+router.get("/audit", listAudit);
+router.get("/accounts", listAccounts);
+router.get("/users/:id/overview", getOperationalUser);
+router.get("/staff", listStaff);
+router.patch("/staff/:id/role", updateStaffRole);
+router.get("/health", getHealth);
 router.get("/learnings/:id/attempts", getAdminAttempts);
 router.get("/learning-attempts/:attemptId", getAttemptDetails);
 router.get("/users/:userId/learning-attempts", getUserAttempts);
