@@ -12,11 +12,13 @@ import verificationRoutes from "../route/verification.route.js";
 import notificationRoutes from "../route/notification.route.js";
 import termsRoutes from "../route/terms.route.js";
 import userRoutes from "../route/user.route.js";
+import bankRoutes from "../route/bank.route.js";
 
 const router = express.Router();
 
 router.use("/auth", authRoutes);
 router.use("/accounts", accountRoutes);
+router.use("/banks", bankRoutes);
 router.use("/guardians", guardianRoutes);
 router.use("/news", newsRoutes);
 router.use("/learnings", learningRoutes);

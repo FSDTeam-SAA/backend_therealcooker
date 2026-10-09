@@ -8,11 +8,16 @@ import {
 } from "../controller/admin.controller.js";
 import { protect, isAdmin } from "../middleware/auth.middleware.js";
 import { getOverview, getAdminIdentity, listAlerts, updateAlert, listCases, createCase, updateCase, listEvents, listAudit, listAccounts, getOperationalUser, listOperators, listStaff, updateStaffRole, getHealth } from "../controller/operations.controller.js";
+import { listAdminBanks, createBank, updateBank } from "../controller/bank.controller.js";
+import { upload } from "../middleware/multer.middleware.js";
 
 const router = express.Router();
 
 router.use(protect, isAdmin);
 router.get("/me", getAdminIdentity);
+router.get("/banks", listAdminBanks);
+router.post("/banks", upload.single("logo"), createBank);
+router.patch("/banks/:id", upload.single("logo"), updateBank);
 router.get("/dashboard/overview", getOverview);
 router.get("/alerts", listAlerts);
 router.patch("/alerts/:id", updateAlert);

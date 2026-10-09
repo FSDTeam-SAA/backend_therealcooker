@@ -13,6 +13,7 @@ import { LimitIncreaseRequest } from "../model/limitIncreaseRequest.model.js";
 import { Notification } from "../model/notification.model.js";
 import { User } from "../model/user.model.js";
 import { generateOTP, uploadOnCloudinary } from "../utils/commonMethod.js";
+import { Bank } from "../model/bank.model.js";
 import { createAndEmitNotification } from "../utils/notification.js";
 import { sendEmail } from "../utils/sendEmail.js";
 import { emitToUser } from "../utils/socket.js";
@@ -426,13 +427,20 @@ export const createAccount = catchAsync(async (req, res) => {
     throw new AppError(httpStatus.BAD_REQUEST, "Bank name is required for bank accounts");
   }
 
+  const catalogBank = accountType === "bank"
+    ? await Bank.findOne({ nameKey: String(bankName).trim().replace(/\s+/g, " ").toLocaleLowerCase("en"), isActive: true })
+    : null;
+  if (accountType === "bank" && !catalogBank) {
+    throw new AppError(httpStatus.BAD_REQUEST, "Select an available bank from the bank list");
+  }
+
   const account = await Account.create({
     user: req.user._id,
     accountType,
-    bankName,
+    bankName: catalogBank?.name || bankName,
     nickname: nickname?.trim() || "",
     accountNumberEncrypted,
-    imageUrl: await uploadedFileUrl(req),
+    imageUrl: (await uploadedFileUrl(req)) || catalogBank?.logo.url || "",
   });
 
   const guardians = await Guardian.find({
@@ -1016,7 +1024,13 @@ export const updateAccount = catchAsync(async (req, res) => {
   }
 
   if (accountType) account.accountType = accountType;
-  if (bankName) account.bankName = bankName;
+  if (account.accountType === "bank" && (bankName || accountType === "bank")) {
+    const selectedName = bankName || account.bankName;
+    const catalogBank = await Bank.findOne({ nameKey: String(selectedName || "").trim().replace(/\s+/g, " ").toLocaleLowerCase("en"), isActive: true });
+    if (!catalogBank) throw new AppError(httpStatus.BAD_REQUEST, "Select an available bank from the bank list");
+    account.bankName = catalogBank.name;
+    if (!account.imageUrl) account.imageUrl = catalogBank.logo.url;
+  } else if (bankName) account.bankName = bankName;
   if (nickname !== undefined) account.nickname = nickname?.trim() || "";
   if (accountNumberEncrypted) {
     if (!/^\d{7,}$/.test(String(accountNumberEncrypted).trim())) {

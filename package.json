@@ -10,7 +10,8 @@
     "stop": "sh ./scripts/free-port.sh",
     "predev": "npm run stop",
     "dev": "nodemon --no-stdin server.js",
-    "seed:demo-feeds": "node scripts/seed-demo-feeds.js"
+    "seed:demo-feeds": "node scripts/seed-demo-feeds.js",
+    "seed:banks": "node scripts/seed-bank-catalog.js"
   },
   "author": "",
   "license": "ISC",

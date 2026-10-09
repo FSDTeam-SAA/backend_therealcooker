@@ -1,7 +1,7 @@
 export const ADMIN_ROLES = ["superadmin", "operations", "support", "analyst"];
 export const rolePermissions = {
   superadmin: ["*"],
-  operations: ["overview:read", "users:read", "users:write", "accounts:read", "alerts:read", "alerts:write", "cases:read", "cases:write", "events:read", "learning:read", "learning:results", "verification:read", "health:read"],
+  operations: ["overview:read", "users:read", "users:write", "accounts:read", "banks:read", "banks:write", "alerts:read", "alerts:write", "cases:read", "cases:write", "events:read", "learning:read", "learning:results", "verification:read", "health:read"],
   support: ["overview:read", "users:read", "alerts:read", "cases:read", "cases:write", "learning:read", "learning:results", "health:read"],
   analyst: ["overview:read", "events:read", "learning:read", "health:read"],
 };
@@ -18,6 +18,7 @@ export function routePermission(req) {
   else if (/\/alerts/.test(path)) section = "alerts";
   else if (/\/cases/.test(path)) section = "cases";
   else if (/\/events/.test(path)) section = "events";
+  else if (/\/banks/.test(path)) section = "banks";
   else if (/\/accounts/.test(path)) section = "accounts";
   else if (/\/health/.test(path)) section = "health";
   else if (/\/learning-attempts|\/attempts(?:\/|$)/.test(path)) return "learning:results";
