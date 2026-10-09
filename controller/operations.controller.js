@@ -42,7 +42,8 @@ export const getOverview = catchAsync(async (req, res) => {
   const [totalUsers, emailVerified, kycVerified, newToday, new7, new30, dau, wau, mau, activeAccounts, bankUsers,
     banks, alertsToday, alerts7, alerts30, risk, reviewed, falsePositive, openCases, resolvedCases, openPanics,
     panicToday, protective, response, usage, sources, progress, popular, attempts,
-    newTrend, activeTrend, alertTrend, panicTrend, protectiveTrend, caseTrend, confirmedTrend, availability] = await Promise.all([
+    newTrend, activeTrend, alertTrend, panicTrend, protectiveTrend, caseTrend, confirmedTrend, availability,
+    ageGroups, professions, countries, accountCounts, linkedUsers, panicTypes] = await Promise.all([
     User.countDocuments(users), User.countDocuments({ ...users, "verificationInfo.verified": true }), User.countDocuments({ ...users, "kyc.status": "completed" }),
     ...[today, seven, thirty].map(date => User.countDocuments({ ...users, createdAt: { $gte: date } })),
     ...[today, new Date(today - 6 * DAY), new Date(today - 29 * DAY)].map(activeCount),
@@ -65,13 +66,34 @@ export const getOverview = catchAsync(async (req, res) => {
     daily(OperationEvent, { kind: "protective_action", occurredAt: period, outcome: { $ne: "user_unblocked" } }, "occurredAt"), daily(SupportCase, { resolvedAt: period }, "resolvedAt"),
     daily(SecurityAlert, { verdict: "confirmed", createdAt: period }),
     AvailabilitySample.aggregate([{ $match: { checkedAt: period } }, { $group: { _id: "$service", samples: { $sum: 1 }, healthy: { $sum: { $cond: ["$available", 1, 0] } }, lastCheckedAt: { $max: "$checkedAt" } } }]),
+    User.aggregate([
+      { $match: { role: "user", dob: { $type: "date" } } },
+      { $project: { age: { $dateDiff: { startDate: "$dob", endDate: now, unit: "year" } } } },
+      { $bucket: { groupBy: "$age", boundaries: [0, 18, 25, 35, 45, 55, 65, 200], default: "unknown", output: { count: { $sum: 1 } } } },
+    ]),
+    ...["profession", "country"].map(field => User.aggregate([
+      { $match: { role: "user", [field]: { $exists: true, $nin: ["", null] } } },
+      { $group: { _id: `$${field}`, count: { $sum: 1 } } }, { $sort: { count: -1, _id: 1 } }, { $limit: 6 },
+    ])),
+    Account.aggregate([
+      { $match: { isActive: true } }, { $group: { _id: "$user", count: { $sum: 1 } } },
+      { $bucket: { groupBy: "$count", boundaries: [1, 2, 3, 5, 10], default: "10+", output: { users: { $sum: 1 } } } },
+    ]),
+    Account.aggregate([{ $match: { isActive: true } }, { $group: { _id: "$user" } }, { $count: "count" }]),
+    groupedCounts(OperationEvent, { kind: "panic", occurredAt: period }, "outcome"),
   ]);
   const learning = progress[0] || { started: 0, completed: 0, averageDurationMs: null, additionalUsers: [] };
+  const ageLabels = { 0: "Under 18", 18: "18-24", 25: "25-34", 35: "35-44", 45: "45-54", 55: "55-64", 65: "65+" };
+  const profileRows = rows => rows.map(row => ({ label: String(row._id), count: row.count }));
   respond(res, { days, from: start, to: end, timezone: "UTC", generatedAt: now,
-    users: { total: totalUsers, emailVerified, emailVerifiedPercent: percent(emailVerified, totalUsers), kycVerified, kycVerifiedPercent: percent(kycVerified, totalUsers), newToday, new7, new30, dau, wau, mau },
+    users: { total: totalUsers, emailVerified, emailVerifiedPercent: percent(emailVerified, totalUsers), kycVerified, kycVerifiedPercent: percent(kycVerified, totalUsers), newToday, new7, new30, dau, wau, mau,
+      profiles: { ages: ageGroups.filter(row => row._id !== "unknown").map(row => ({ label: ageLabels[row._id], count: row.count })),
+        ageUnknown: totalUsers - ageGroups.filter(row => row._id !== "unknown").reduce((sum, row) => sum + row.count, 0),
+        professions: profileRows(professions), countries: profileRows(countries),
+        accountCounts: [{ label: "0", users: Math.max(0, totalUsers - (linkedUsers[0]?.count || 0)) }, ...accountCounts.map(row => ({ label: row._id === "10+" ? "10+" : row._id === 3 ? "3-4" : row._id === 5 ? "5-9" : String(row._id), users: row.users }))] } },
     accounts: { active: activeAccounts, bankLinkedUsers: bankUsers.length, bankLinkedPercent: percent(bankUsers.length, totalUsers), banks },
     alerts: { today: alertsToday, last7: alerts7, last30: alerts30, risk, falsePositive, reviewed, falsePositiveRate: percent(falsePositive, reviewed), averageResponseMs: response[0]?.averageMs ?? null, responseSampleCount: response[0]?.count || 0 },
-    panics: { today: panicToday, open: openPanics }, cases: { open: openCases, resolved: resolvedCases }, protectiveActions: protective,
+    panics: { today: panicToday, open: openPanics, byType: profileRows(panicTypes) }, cases: { open: openCases, resolved: resolvedCases }, protectiveActions: protective,
     verification: { usage, sources }, learning: { started: learning.started, completed: learning.completed, incomplete: learning.started - learning.completed, averageDurationMs: learning.averageDurationMs, additionalQuestionUsers: learning.additionalUsers.filter(Boolean).length, popular, attempts },
     availability: availability.map(row => ({ service: row._id, samples: row.samples, percent: percent(row.healthy, row.samples), lastCheckedAt: row.lastCheckedAt })),
     trends: trendRows(start, end, { newUsers: newTrend, activeUsers: activeTrend, alerts: alertTrend, panics: panicTrend, protective: protectiveTrend, resolvedCases: caseTrend, confirmed: confirmedTrend }),

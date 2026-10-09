@@ -85,15 +85,23 @@ test("overview combines database aggregates, separates verification types and ze
   const stub = (model, method, fn) => { const original = model[method]; model[method] = fn; restore.push(() => model[method] = original); };
   const date = new Date().toISOString().slice(0, 10);
   stub(User, "countDocuments", async filter => { assert.equal(filter.role, "user"); return filter["kyc.status"] ? 2 : filter["verificationInfo.verified"] ? 3 : 4; });
-  stub(User, "aggregate", async () => [{ _id: date, count: 2 }]);
+  stub(User, "aggregate", async pipeline => {
+    if (pipeline.some(stage => stage.$bucket)) return [{ _id: 25, count: 2 }];
+    if (pipeline.some(stage => stage.$limit)) return [{ _id: "Engineer", count: 2 }];
+    return [{ _id: date, count: 2 }];
+  });
   stub(Account, "countDocuments", async () => 6);
   stub(Account, "distinct", async () => ["user1", "user2"]);
-  stub(Account, "aggregate", async () => [{ bank: "Example Bank", users: 2, accounts: 6 }]);
+  stub(Account, "aggregate", async pipeline => {
+    if (pipeline.some(stage => stage.$bucket)) return [{ _id: 1, users: 2 }];
+    if (pipeline.some(stage => stage.$count)) return [{ count: 2 }];
+    return [{ bank: "Example Bank", users: 2, accounts: 6 }];
+  });
   stub(OperationEvent, "distinct", async () => ["user1"]);
   stub(OperationEvent, "countDocuments", async () => 1);
   stub(OperationEvent, "aggregate", async pipeline => {
     const group = pipeline.find(stage => stage.$group)?.$group;
-    return typeof group?._id === "string" ? [{ _id: group._id === "$tool" ? "phone" : "moneykee", count: 5 }] : [{ _id: date, count: 1 }];
+    return typeof group?._id === "string" ? [{ _id: group._id === "$tool" ? "phone" : group._id === "$outcome" ? "sos" : "moneykee", count: 5 }] : [{ _id: date, count: 1 }];
   });
   stub(OperationEvent, "findOne", () => ({ sort() { return this; }, select() { return this; }, lean: async () => ({ occurredAt: new Date() }) }));
   stub(SecurityAlert, "countDocuments", async () => 1);
@@ -114,5 +122,8 @@ test("overview combines database aggregates, separates verification types and ze
     assert.equal(data.accounts.bankLinkedPercent, 50); assert.equal(data.trends.length, 7); assert.equal(data.trends[6].newUsers, 2); assert.equal(data.trends[0].newUsers, 0);
     assert.equal(data.alerts.averageResponseMs, 120000); assert.equal(data.learning.incomplete, 2); assert.equal(data.learning.additionalQuestionUsers, 1);
     assert.equal(data.availability[0].percent, 90); assert.equal(data.verification.usage[0]._id, "phone");
+    assert.deepEqual(data.users.profiles.ages, [{ label: "25-34", count: 2 }]);
+    assert.deepEqual(data.users.profiles.accountCounts, [{ label: "0", users: 2 }, { label: "1", users: 2 }]);
+    assert.equal(data.panics.byType[0].label, "sos");
   } finally { restore.reverse().forEach(fn => fn()); }
 });
