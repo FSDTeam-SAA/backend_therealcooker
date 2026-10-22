@@ -18,6 +18,8 @@ import { renderAnalyticsPdf } from "../utils/analyticsPdf.js";
 const respond = (res, data) => sendResponse(res, { statusCode: 200, success: true, message: "Dashboard data fetched successfully", data });
 const KYC_SUBMITTED = ["pending", "completed", "failed"];
 const bankAccounts = { isActive: true, accountType: "bank" };
+// Any active account the user linked in the app: bank or wallet.
+const linkedAccounts = { isActive: true };
 
 // Shared by the header, the sidebar badge and the dashboard so their counts always agree.
 async function liveStatus(now = new Date()) {
@@ -45,11 +47,12 @@ export const getExecutiveDashboard = catchAsync(async (req, res) => {
   const today = { from: startOfToday(now, zone), to: now }, thisWeek = { from: week.start, to: now }, thisMonth = { from: month.start, to: now };
   const trend = recentDays(7, now, zone);
   const canSeePeople = can(req.user, "users:read"), canSeeAlerts = can(req.user, "alerts:read");
-  const [status, totalUsers, newThisWeek, activeToday, activeThisMonth, bankUsers, bankRows,
+  const [status, totalUsers, newThisWeek, activeToday, activeThisMonth, linkedUsers, bankUsers, bankRows,
     fraudToday, fraudWeek, fraudMonth, incidentsToday, guardianToday, monthSearches,
     learning, daily, kycCounts, kycRecent, feed, services] = await Promise.all([
     liveStatus(now),
     User.countDocuments({ role: "user" }), newUsers(thisWeek), activeUsers(today), activeUsers(thisMonth),
+    Account.distinct("user", linkedAccounts),
     Account.distinct("user", bankAccounts),
     Account.aggregate([{ $match: bankAccounts }, { $group: { _id: "$bankName", users: { $addToSet: "$user" } } }, { $project: { _id: 0, bank: "$_id", users: { $size: "$users" } } }, { $sort: { users: -1, bank: 1 } }, { $limit: 6 }]),
     fraudAlertCount(today), fraudAlertCount(thisWeek), fraudAlertCount(thisMonth),
@@ -74,7 +77,7 @@ export const getExecutiveDashboard = catchAsync(async (req, res) => {
     status,
     snapshot: { totalUsers, newThisWeek, activeToday, activeThisMonth,
       verifiedUsers: kyc.completed, verifiedPercent: ratio(kyc.completed, totalUsers),
-      bankConnected: bankUsers.length, bankConnectedPercent: ratio(bankUsers.length, totalUsers) },
+      linkedAccountUsers: linkedUsers.length, linkedAccountPercent: ratio(linkedUsers.length, totalUsers) },
     security: { fraudAlerts: { today: fraudToday, week: fraudWeek, month: fraudMonth } },
     panics: { criticalSosToday: incidentsToday.criticalSos, guardianPanicsToday: incidentsToday.elevatedGuardianPanic, resolvedToday: incidentsToday.resolved,
       open: status.incidents.active, guardianAlertsToday: guardianToday },
