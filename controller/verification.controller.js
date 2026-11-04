@@ -5,8 +5,9 @@ import sendResponse from "../utils/sendResponse.js";
 import { Verification } from "../model/verification.model.js";
 import { recordEvent } from "../utils/operations.js";
 import { maskSearchValue } from "../utils/maskSearchValue.js";
+import { VerificationFeedback, VerificationVote } from "../model/verificationFeedback.model.js";
 
-const LOOKUP_TYPES = new Set(["email", "phone", "account", "website"]);
+export const LOOKUP_TYPES = new Set(["email", "phone", "account", "website"]);
 const VERIFIED_STATUSES = new Set([
   "verified",
   "valid",
@@ -129,7 +130,7 @@ export const buildVerificationLookupFilter = (type, normalizedValue) => {
   return { [type]: new RegExp(`^${separator}${characters}${separator}$`, "i") };
 };
 
-const validateLookupValue = (value, type, rawValue) => {
+export const validateLookupValue = (value, type, rawValue) => {
   const raw = String(rawValue ?? "").trim();
   if (raw.length > 2048) {
     throw new AppError(
@@ -188,6 +189,9 @@ export const checkVerification = catchAsync(async (req, res) => {
     await recordEvent({ kind: "verification_lookup", tool: type, outcome: "not_found", source: "moneykee", user: req.user?._id, maskedValue: maskSearchValue(type, normalizedValue) });
     const message =
       "No record found for this information in our database. Exercise caution.";
+    // Not-found contacts can take community feedback; a signed-in user sees whether they already voted.
+    const feedback = req.user ? await VerificationFeedback.findOne({ type, value: normalizedValue }).select("_id").lean() : null;
+    const previousVote = feedback ? await VerificationVote.findOne({ feedback: feedback._id, user: req.user._id }).select("verdict").lean() : null;
     return res.status(httpStatus.OK).json({
       success: true,
       status: "not_found",
@@ -198,16 +202,19 @@ export const checkVerification = catchAsync(async (req, res) => {
         value: normalizedValue,
         details: null,
         message,
+        feedback: { yourVote: previousVote?.verdict || null },
       },
     });
   }
 
   const status = normalizeVerificationStatus(record.status);
   await recordEvent({ kind: "verification_lookup", tool: type, outcome: status, source: "moneykee", entityType: "verification", entityId: String(record._id), user: req.user?._id, maskedValue: maskSearchValue(type, normalizedValue) });
+  // A verdict reached through community feedback says so rather than implying MoneyKee verified it.
+  const community = record.source === "community";
   const message =
     status === "verified"
-      ? "This entity is verified."
-      : "Warning: Flagged as fraudulent.";
+      ? community ? "MoneyKee users who checked this marked it as legitimate." : "This entity is verified."
+      : community ? "Warning: MoneyKee users who checked this flagged it as suspicious." : "Warning: Flagged as fraudulent.";
 
   return res.status(httpStatus.OK).json({
     success: true,
@@ -222,6 +229,7 @@ export const checkVerification = catchAsync(async (req, res) => {
         type,
         value: normalizeVerificationValue(record[type], type),
         recordedAt: record.createdAt,
+        source: community ? "community" : "moneykee",
       },
     },
   });

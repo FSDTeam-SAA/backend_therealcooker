@@ -3,6 +3,8 @@ import { Account } from "../model/account.model.js";
 import { Notification } from "../model/notification.model.js";
 import { Learning } from "../model/learning.model.js";
 import { LearningAttempt } from "../model/learning-attempt.model.js";
+import { EmergencySession } from "../model/emergencySession.model.js";
+import { LimitIncreaseRequest } from "../model/limitIncreaseRequest.model.js";
 import { SecurityAlert, OperationEvent, AvailabilitySample, IntegrationMetric, LearningProgress, ServerMetricSample } from "../model/operation.model.js";
 import { percent } from "./reporting.js";
 import { GUARDIAN_ALERT_TYPES } from "./notification.js";
@@ -98,6 +100,132 @@ export async function searches(range) {
 // Activity is recorded as one marker per user per UTC day, so active-user counts follow UTC days.
 export const activeUsers = async range => (await OperationEvent.distinct("user", { kind: "activity", occurredAt: between(range), user: { $ne: null } })).length;
 export const newUsers = range => User.countDocuments({ role: "user", createdAt: between(range) });
+
+// Active users: registered users with at least one activity marker in the last `days` UTC days, today
+// included. Markers come from every successful authenticated app request and every sign-in or token
+// refresh, so a user counts once however often they were active. Deleted users drop out.
+export const ACTIVE_WINDOW_DAYS = 30;
+export async function recentlyActiveUsers(now = new Date(), days = ACTIVE_WINDOW_DAYS) {
+  const from = new Date(now); from.setUTCHours(0, 0, 0, 0); from.setUTCDate(from.getUTCDate() - (days - 1));
+  const ids = await OperationEvent.distinct("user", { kind: "activity", occurredAt: { $gte: from, $lte: now }, user: { $ne: null } });
+  return { count: ids.length ? await User.countDocuments({ _id: { $in: ids }, role: "user" }) : 0, since: from };
+}
+
+// Accounts users added in the app and still hold. Removing an account deletes it; inactive records are
+// hidden from the app, so they are excluded too, as are accounts left behind by deleted users. An
+// account entered twice by the same user (same type, bank and number) counts once.
+export async function totalAccounts() {
+  const [row] = await Account.aggregate([
+    { $match: { isActive: true } },
+    { $group: { _id: { user: "$user", type: "$accountType", bank: "$bankName", number: "$accountNumberEncrypted" } } },
+    { $lookup: { from: User.collection.collectionName, localField: "_id.user", foreignField: "_id", pipeline: [{ $match: { role: "user" } }, { $project: { _id: 1 } }], as: "owner" } },
+    { $match: { "owner.0": { $exists: true } } },
+    { $count: "count" },
+  ]);
+  return row?.count || 0;
+}
+
+// Security events, all time. Operational telemetry (SecurityAlert, OperationEvent) only exists from when
+// tracking started, and deleting a user removes their sessions and limit requests while alerts are kept,
+// so each event is counted from every table that records it and deduplicated by the key they share.
+async function distinctKeys(sources) {
+  const [first, ...rest] = sources.map(({ model, match = {}, key }) => ({ model, coll: model.collection.collectionName, pipeline: [{ $match: match }, { $project: { _id: 0, key } }] }));
+  const [row] = await first.model.aggregate([...first.pipeline, ...rest.map(({ coll, pipeline }) => ({ $unionWith: { coll, pipeline } })),
+    { $match: { key: { $nin: [null, ""] } } }, { $group: { _id: "$key" } }, { $count: "count" }]);
+  return row?.count || 0;
+}
+const idKey = { $toString: "$_id" };
+
+// "Alert Guardians" requests are keyed by their live-location share id. Requests sent before share ids
+// existed are only in guardians' notifications; one request notifies every guardian at once, so
+// notifications from the same sender within a couple of seconds are one request.
+async function guardianAlertEvents() {
+  const legacy = { type: "guardian_alert", sender: { $ne: null }, "data.liveLocationShareId": { $exists: false }, $expr: { $ne: ["$recipient", "$sender"] } };
+  const [keyed, [early]] = await Promise.all([
+    distinctKeys([
+      { model: SecurityAlert, match: { type: "guardian_alert" }, key: "$entityId" },
+      { model: OperationEvent, match: { kind: "panic", outcome: "guardian_alert" }, key: "$entityId" },
+      { model: Notification, match: { type: "guardian_alert" }, key: "$data.liveLocationShareId" },
+    ]),
+    Notification.aggregate([
+      { $match: legacy },
+      { $setWindowFields: { partitionBy: "$sender", sortBy: { createdAt: 1 }, output: { previous: { $shift: { output: "$createdAt", by: -1 } } } } },
+      { $match: { $expr: { $or: [{ $eq: ["$previous", null] }, { $gt: [{ $subtract: ["$createdAt", "$previous"] }, 2000] }] } } },
+      { $count: "count" },
+    ]),
+  ]);
+  return keyed + (early?.count || 0);
+}
+
+// Internal events are the user's own safety actions in the app. A lockdown is its own event: SOS
+// activation locks every active account (when the user has any), and so does a failed or expired
+// limit-increase verification.
+export async function internalSecurityEvents() {
+  const [guardianAlerts, sos, sosLockdowns, verificationLockdowns] = await Promise.all([
+    guardianAlertEvents(),
+    distinctKeys([
+      { model: EmergencySession, key: idKey },
+      { model: SecurityAlert, match: { type: "sos" }, key: "$entityId" },
+      { model: OperationEvent, match: { kind: "panic", outcome: "sos" }, key: "$entityId" },
+    ]),
+    distinctKeys([
+      { model: EmergencySession, match: { "lockedAccounts.0": { $exists: true } }, key: idKey },
+      { model: OperationEvent, match: { kind: "protective_action", outcome: "accounts_locked", entityType: "emergency" }, key: "$entityId" },
+    ]),
+    distinctKeys([
+      { model: LimitIncreaseRequest, match: { status: "locked" }, key: idKey },
+      { model: SecurityAlert, match: { type: "account_lock" }, key: "$entityId" },
+      { model: OperationEvent, match: { kind: "protective_action", outcome: "accounts_locked", entityType: "limit_request" }, key: "$entityId" },
+    ]),
+  ]);
+  return securityEventGroup([
+    { key: "guardian_alerts", label: "Guardian Alerts", count: guardianAlerts },
+    { key: "sos", label: "SOS Events", count: sos },
+    { key: "account_locks", label: "Bank Account Lock Events", count: sosLockdowns + verificationLockdowns,
+      parts: [{ label: "from SOS", count: sosLockdowns }, { label: "after failed limit verification", count: verificationLockdowns }] },
+  ]);
+}
+
+// External events come from the account's financial settings. Every limit-increase request counts,
+// whatever happened next; its current status is reported alongside.
+export async function externalSecurityEvents() {
+  const [requests, statuses] = await Promise.all([
+    distinctKeys([
+      { model: LimitIncreaseRequest, key: idKey },
+      { model: SecurityAlert, match: { type: "suspicious_limit" }, key: "$entityId" },
+    ]),
+    LimitIncreaseRequest.aggregate([{ $group: { _id: "$status", count: { $sum: 1 } } }]),
+  ]);
+  const status = byKey(statuses, ["approved", "locked", "notified", "otp_sent"]);
+  const pending = status.notified + status.otp_sent, removed = requests - status.approved - status.locked - pending;
+  return securityEventGroup([
+    { key: "limit_increase", label: "Increased Account Limit", count: requests,
+      parts: [{ label: "completed", count: status.approved }, { label: "locked", count: status.locked }, { label: "awaiting verification", count: pending },
+        ...(removed > 0 ? [{ label: "no longer on record", count: removed }] : [])] },
+  ]);
+}
+const securityEventGroup = categories => ({ total: categories.reduce((sum, category) => sum + category.count, 0), categories });
+
+// Users who completed at least N of the published modules, at up to five milestones spread evenly from
+// one module to all of them. Completion follows learningOverview (the module's quiz was submitted); a
+// module counts once per user however many times it was submitted. Deleted users are excluded.
+export function completionMilestones(modules, count = 5) {
+  if (modules <= count) return Array.from({ length: Math.max(0, modules) }, (_, index) => index + 1);
+  return [...new Set(Array.from({ length: count }, (_, index) => Math.round(1 + index * (modules - 1) / (count - 1))))];
+}
+export async function moduleCompletionDistribution() {
+  const modules = await Learning.distinct("_id", { isPublished: true });
+  const milestones = completionMilestones(modules.length);
+  const rows = milestones.length ? await LearningAttempt.aggregate([
+    { $match: { learning: { $in: modules } } },
+    { $group: { _id: { user: "$user", learning: "$learning" } } },
+    { $group: { _id: "$_id.user", completed: { $sum: 1 } } },
+    { $lookup: { from: User.collection.collectionName, localField: "_id", foreignField: "_id", pipeline: [{ $match: { role: "user" } }, { $project: { _id: 1 } }], as: "owner" } },
+    { $match: { "owner.0": { $exists: true } } },
+    { $group: { _id: "$completed", users: { $sum: 1 } } },
+  ]) : [];
+  return { totalModules: modules.length, milestones: milestones.map(minimum => ({ minimum, users: rows.filter(row => row._id >= minimum).reduce((sum, row) => sum + row.users, 0) })) };
+}
 
 export async function userActivity(range) {
   const [active, created, kycSubmitted, kycCompleted, linked] = await Promise.all([

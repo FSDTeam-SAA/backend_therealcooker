@@ -8,6 +8,7 @@ import { sendEmail } from "../utils/sendEmail.js";
 import { User } from "../model/user.model.js";
 import crypto from "node:crypto";
 import { verifyGoogleIdToken } from "../utils/googleAuth.js";
+import { recordActivity } from "../utils/operations.js";
 
 const AUTH_OTP_LENGTH = 4;
 
@@ -165,6 +166,8 @@ export const verifySignupOtp = catchAsync(async (req, res) => {
   await user.save();
 
   const userObj = toAuthResponse(user, accessToken);
+  // Signing in is app activity even though these routes run before authentication.
+  void recordActivity(user);
 
   sendResponse(res, {
     statusCode: httpStatus.OK,
@@ -236,6 +239,7 @@ export const login = catchAsync(async (req, res) => {
   await user.save();
 
   const userObj = toAuthResponse(user, accessToken);
+  void recordActivity(user);
 
   sendResponse(res, {
     statusCode: httpStatus.OK,
@@ -302,6 +306,7 @@ export const googleLogin = catchAsync(async (req, res) => {
   await user.save();
 
   const userObj = toAuthResponse(user, accessToken, { isNewUser });
+  void recordActivity(user);
 
   sendResponse(res, {
     statusCode: httpStatus.OK,
@@ -349,6 +354,7 @@ export const refreshToken = catchAsync(async (req, res) => {
     process.env.JWT_ACCESS_SECRET,
     process.env.JWT_ACCESS_EXPIRES_IN
   );
+  void recordActivity(user);
   sendResponse(res, {
     statusCode: httpStatus.OK,
     success: true,

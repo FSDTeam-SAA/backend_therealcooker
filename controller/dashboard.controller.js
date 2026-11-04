@@ -1,14 +1,14 @@
-import mongoose from "mongoose";
 import catchAsync from "../utils/catchAsync.js";
 import sendResponse from "../utils/sendResponse.js";
 import { User } from "../model/user.model.js";
 import { Account } from "../model/account.model.js";
-import { EmergencySession } from "../model/emergencySession.model.js";
-import { SecurityAlert, AvailabilitySample, ServerMetricSample } from "../model/operation.model.js";
+import { AvailabilitySample, ServerMetricSample } from "../model/operation.model.js";
+import { VerificationFeedback } from "../model/verificationFeedback.model.js";
 import { can } from "../utils/adminPermissions.js";
 import { DAY } from "../utils/reporting.js";
 import { reportingTimezone, reportingPeriod, startOfToday, recentDays } from "../utils/reportingPeriods.js";
-import { PANIC_TYPES, ratio, activeIncidents, incidentActivity, guardianAlerts, fraudAlertCount, searches, learningOverview, activeUsers, newUsers, dailySeries, platformServices } from "../utils/dashboardMetrics.js";
+import { ratio, activeIncidents, searches, learningOverview, activeUsers, newUsers, dailySeries, platformServices,
+  ACTIVE_WINDOW_DAYS, recentlyActiveUsers, totalAccounts, internalSecurityEvents, externalSecurityEvents, moduleCompletionDistribution } from "../utils/dashboardMetrics.js";
 import { sampleEnvironment, latestServerMetrics } from "../utils/availability.js";
 import { gpuStatus, hostDescription } from "../utils/serverMetrics.js";
 import { databaseMetrics } from "../utils/databaseMetrics.js";
@@ -23,9 +23,10 @@ const linkedAccounts = { isActive: true };
 
 // Shared by the header, the sidebar badge and the dashboard so their counts always agree.
 async function liveStatus(now = new Date()) {
-  const [incidents, kycPending, latest] = await Promise.all([
+  const [incidents, kycPending, feedbackReview, latest] = await Promise.all([
     activeIncidents(),
     User.countDocuments({ role: "user", "kyc.status": "pending" }),
+    VerificationFeedback.countDocuments({ status: "needs_review" }),
     AvailabilitySample.aggregate([
       { $match: { environment: sampleEnvironment(), checkedAt: { $gte: new Date(now - 20 * 60_000) } } }, { $sort: { checkedAt: 1 } },
       { $group: { _id: "$service", available: { $last: "$available" }, checkedAt: { $last: "$checkedAt" } } },
@@ -33,7 +34,7 @@ async function liveStatus(now = new Date()) {
   ]);
   const degraded = latest.filter(row => !row.available).map(row => row._id).sort();
   return {
-    incidents, kycPending,
+    incidents, kycPending, feedbackReview,
     // null when no recent check exists: the state is unknown, not healthy.
     systems: { operational: latest.length ? degraded.length === 0 : null, degraded, checkedAt: latest.length ? new Date(Math.max(...latest.map(row => row.checkedAt))) : null },
   };
@@ -46,52 +47,36 @@ export const getExecutiveDashboard = catchAsync(async (req, res) => {
   const week = reportingPeriod({ period: "week" }, now, zone), month = reportingPeriod({ period: "month" }, now, zone);
   const today = { from: startOfToday(now, zone), to: now }, thisWeek = { from: week.start, to: now }, thisMonth = { from: month.start, to: now };
   const trend = recentDays(7, now, zone);
-  const canSeePeople = can(req.user, "users:read"), canSeeAlerts = can(req.user, "alerts:read");
-  const [status, totalUsers, newThisWeek, activeToday, activeThisMonth, linkedUsers, bankUsers, bankRows,
-    fraudToday, fraudWeek, fraudMonth, incidentsToday, guardianToday, monthSearches,
-    learning, daily, kycCounts, kycRecent, feed, services] = await Promise.all([
+  const canSeePeople = can(req.user, "users:read");
+  const [status, totalUsers, newThisWeek, activeToday, active, accounts, linkedUsers, bankUsers, bankRows,
+    internal, external, monthSearches, learning, learningDistribution, daily, kycCounts, kycRecent, services] = await Promise.all([
     liveStatus(now),
-    User.countDocuments({ role: "user" }), newUsers(thisWeek), activeUsers(today), activeUsers(thisMonth),
+    User.countDocuments({ role: "user" }), newUsers(thisWeek), activeUsers(today), recentlyActiveUsers(now), totalAccounts(),
     Account.distinct("user", linkedAccounts),
     Account.distinct("user", bankAccounts),
     Account.aggregate([{ $match: bankAccounts }, { $group: { _id: "$bankName", users: { $addToSet: "$user" } } }, { $project: { _id: 0, bank: "$_id", users: { $size: "$users" } } }, { $sort: { users: -1, bank: 1 } }, { $limit: 6 }]),
-    fraudAlertCount(today), fraudAlertCount(thisWeek), fraudAlertCount(thisMonth),
-    incidentActivity(today), guardianAlerts(today), searches(thisMonth),
-    learningOverview(),
+    internalSecurityEvents(), externalSecurityEvents(), searches(thisMonth),
+    learningOverview(), moduleCompletionDistribution(),
     dailySeries({ from: trend.start, to: now }, trend.days, zone),
     User.aggregate([{ $match: { role: "user", "kyc.status": { $in: KYC_SUBMITTED } } }, { $group: { _id: "$kyc.status", count: { $sum: 1 } } }]),
     canSeePeople ? User.find({ role: "user", "kyc.status": { $in: KYC_SUBMITTED } }).sort({ "kyc.submittedAt": -1, updatedAt: -1 }).limit(5).select("name userId kyc.status kyc.submittedAt").lean() : null,
-    canSeeAlerts ? SecurityAlert.find({ type: { $in: PANIC_TYPES } }).sort({ createdAt: -1 }).limit(5).select("type title severity status createdAt entityId user").populate("user", "userId").lean() : null,
     platformServices(thisMonth, now),
   ]);
 
-  const sessions = feed?.some(alert => alert.type === "sos")
-    ? await EmergencySession.find({ _id: { $in: feed.filter(alert => alert.type === "sos" && mongoose.isValidObjectId(alert.entityId)).map(alert => alert.entityId) } })
-      .select("eventLocation lastKnownLocation lockedAccounts").populate("lockedAccounts", "bankName").lean()
-    : [];
   const kyc = Object.fromEntries(KYC_SUBMITTED.map(state => [state, kycCounts.find(row => row._id === state)?.count || 0]));
 
   respond(res, {
     generatedAt: now, timezone: zone,
     periods: { week: { start: week.start, label: week.label }, month: { start: month.start, label: month.label } },
     status,
-    snapshot: { totalUsers, newThisWeek, activeToday, activeThisMonth,
+    snapshot: { totalUsers, newThisWeek, activeToday,
+      activeUsers: active.count, activeWindow: { days: ACTIVE_WINDOW_DAYS, since: active.since }, totalAccounts: accounts,
       verifiedUsers: kyc.completed, verifiedPercent: ratio(kyc.completed, totalUsers),
       linkedAccountUsers: linkedUsers.length, linkedAccountPercent: ratio(linkedUsers.length, totalUsers) },
-    security: { fraudAlerts: { today: fraudToday, week: fraudWeek, month: fraudMonth } },
-    panics: { criticalSosToday: incidentsToday.criticalSos, guardianPanicsToday: incidentsToday.elevatedGuardianPanic, resolvedToday: incidentsToday.resolved,
-      open: status.incidents.active, guardianAlertsToday: guardianToday },
-    feed: feed?.map(alert => {
-      const session = alert.type === "sos" ? sessions.find(row => String(row._id) === alert.entityId) : null;
-      return { id: alert._id, type: alert.type, classification: alert.type === "sos" ? "Critical SOS" : "Elevated Guardian Panic", title: alert.title, status: alert.status, createdAt: alert.createdAt,
-        userId: canSeePeople ? alert.user?.userId || null : null,
-        bankName: session?.lockedAccounts?.find(account => account?.bankName)?.bankName || null,
-        lockedAccounts: session ? session.lockedAccounts?.length || 0 : null,
-        locationShared: session ? Boolean(session.eventLocation?.latitude ?? session.lastKnownLocation?.latitude) : null };
-    }) ?? null,
+    security: { internal, external },
     services,
     verifier: monthSearches,
-    learning,
+    learning, learningDistribution,
     trend: daily.map(row => ({ date: row.date, activeUsers: row.activeUsers, alerts: row.fraudAlerts, panics: row.incidents })),
     kyc: { pending: kyc.pending, verified: kyc.completed, rejected: kyc.failed,
       recent: kycRecent?.map(user => ({ id: user._id, name: user.name || null, userId: user.userId || null, status: user.kyc?.status, submittedAt: user.kyc?.submittedAt || null })) ?? null },

@@ -10,6 +10,7 @@ import { protect, isAdmin } from "../middleware/auth.middleware.js";
 import { getOverview, getAdminIdentity, listAlerts, updateAlert, listCases, createCase, updateCase, listEvents, listAudit, listAccounts, getOperationalUser, listOperators, listStaff, updateStaffRole, getHealth } from "../controller/operations.controller.js";
 import { getDashboardStatus, getExecutiveDashboard, getInfrastructure, getAnalyticsReport, getAnalyticsPdf } from "../controller/dashboard.controller.js";
 import { listAdminBanks, createBank, updateBank, deleteBank } from "../controller/bank.controller.js";
+import { listFeedback, getFeedback, reviewFeedbackDecision } from "../controller/verification-feedback.controller.js";
 import { upload } from "../middleware/multer.middleware.js";
 
 const router = express.Router();
@@ -39,6 +40,9 @@ router.get("/health", getHealth);
 router.get("/health/infrastructure", getInfrastructure);
 router.get("/analytics/report", getAnalyticsReport);
 router.get("/analytics/report.pdf", getAnalyticsPdf);
+router.get("/verification-feedback", listFeedback);
+router.get("/verification-feedback/:id", getFeedback);
+router.patch("/verification-feedback/:id", reviewFeedbackDecision);
 router.get("/learnings/:id/attempts", getAdminAttempts);
 router.get("/learning-attempts/:attemptId", getAttemptDetails);
 router.get("/users/:userId/learning-attempts", getUserAttempts);

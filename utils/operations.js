@@ -8,6 +8,16 @@ export async function safelyTrack(work) {
   catch (error) { console.error("Operational tracking failed:", error.message); }
 }
 export const recordEvent = (data) => safelyTrack(() => OperationEvent.create(data));
+// One marker per app user per UTC day supports distinct active-user windows without logging sensitive URLs.
+export const recordActivity = (user) => {
+  if (!user || user.role === "admin") return;
+  const day = new Date(); day.setUTCHours(0, 0, 0, 0);
+  return safelyTrack(() => OperationEvent.updateOne(
+    { kind: "activity", user: user._id, occurredAt: day },
+    { $setOnInsert: { kind: "activity", user: user._id, occurredAt: day, source: "moneykee" } },
+    { upsert: true }
+  ));
+};
 export const recordAlert = (data) => safelyTrack(() => SecurityAlert.findOneAndUpdate(
   { key: data.key }, { $setOnInsert: data }, { upsert: true, new: true, setDefaultsOnInsert: true }
 ));

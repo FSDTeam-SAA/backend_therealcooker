@@ -1,5 +1,5 @@
-import { OperationEvent, AuditLog } from "../model/operation.model.js";
-import { safelyTrack } from "../utils/operations.js";
+import { AuditLog } from "../model/operation.model.js";
+import { safelyTrack, recordActivity } from "../utils/operations.js";
 
 export function operationalTracking(req, res, next) {
   let snapshot;
@@ -14,15 +14,7 @@ export function operationalTracking(req, res, next) {
   res.on("finish", () => {
     const user = snapshot?.user || req.user;
     if (!user || res.statusCode >= 400) return;
-    if (user.role !== "admin") {
-      // One daily record per user supports distinct active-user windows without logging sensitive URLs.
-      const day = new Date(); day.setUTCHours(0, 0, 0, 0);
-      void safelyTrack(() => OperationEvent.updateOne(
-        { kind: "activity", user: user._id, occurredAt: day },
-        { $setOnInsert: { kind: "activity", user: user._id, occurredAt: day, source: "moneykee" } },
-        { upsert: true }
-      ));
-    }
+    void recordActivity(user);
     if (user.role === "admin" && !["GET", "HEAD", "OPTIONS"].includes(req.method)) {
       void safelyTrack(() => AuditLog.create({ actor: user._id, actorRole: user.adminRole || "superadmin",
         action: req.method, resource: snapshot?.resource,

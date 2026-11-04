@@ -7,7 +7,9 @@ import { EmergencySession } from "../model/emergencySession.model.js";
 import { SecurityAlert, OperationEvent, AvailabilitySample, LearningProgress, IntegrationMetric, ServerMetricSample } from "../model/operation.model.js";
 import { LearningAttempt } from "../model/learning-attempt.model.js";
 import { Learning } from "../model/learning.model.js";
-import { learningOverview } from "../utils/dashboardMetrics.js";
+import { LimitIncreaseRequest } from "../model/limitIncreaseRequest.model.js";
+import { VerificationFeedback } from "../model/verificationFeedback.model.js";
+import { learningOverview, guardianAlerts, completionMilestones } from "../utils/dashboardMetrics.js";
 import { getExecutiveDashboard, getDashboardStatus, getAnalyticsReport, getAnalyticsPdf } from "../controller/dashboard.controller.js";
 import { buildAnalyticsReport } from "../utils/analyticsReport.js";
 import { renderAnalyticsPdf } from "../utils/analyticsPdf.js";
@@ -23,9 +25,9 @@ const chain = value => ({ sort() { return this; }, limit() { return this; }, sel
 function stubAll(stubs = []) {
   const restore = [];
   const stub = (model, method, fn) => { const original = model[method]; model[method] = fn; restore.push(() => { model[method] = original; }); };
-  for (const model of [User, Account, Notification, SecurityAlert, OperationEvent, AvailabilitySample, LearningProgress, LearningAttempt, IntegrationMetric, ServerMetricSample]) stub(model, "aggregate", async () => []);
-  for (const model of [User, SecurityAlert, OperationEvent, LearningProgress]) stub(model, "countDocuments", async () => 0);
-  for (const model of [Account, OperationEvent]) stub(model, "distinct", async () => []);
+  for (const model of [User, Account, Notification, SecurityAlert, OperationEvent, AvailabilitySample, LearningProgress, LearningAttempt, IntegrationMetric, ServerMetricSample, EmergencySession, LimitIncreaseRequest]) stub(model, "aggregate", async () => []);
+  for (const model of [User, SecurityAlert, OperationEvent, LearningProgress, VerificationFeedback]) stub(model, "countDocuments", async () => 0);
+  for (const model of [Account, OperationEvent, Learning]) stub(model, "distinct", async () => []);
   for (const model of [User, SecurityAlert, EmergencySession, IntegrationMetric, ServerMetricSample, OperationEvent]) stub(model, "find", () => chain([]));
   for (const [model, method, fn] of stubs) stub(model, method, fn);
   return () => restore.reverse().forEach(fn => fn());
@@ -36,8 +38,12 @@ test("empty data reports unknown ratios instead of zero and hides people from an
   const restore = stubAll();
   try {
     const data = await call(getExecutiveDashboard, "analyst");
-    assert.equal(data.feed, null); assert.equal(data.kyc.recent, null);
-    assert.deepEqual(Object.keys(data.security), ["fraudAlerts"]);
+    assert.equal(data.kyc.recent, null);
+    assert.equal(data.feed, undefined); assert.equal(data.panics, undefined);
+    assert.deepEqual(data.security.internal.categories.map(row => [row.key, row.count]), [["guardian_alerts", 0], ["sos", 0], ["account_locks", 0]]);
+    assert.deepEqual([data.security.internal.total, data.security.external.total], [0, 0]);
+    assert.deepEqual([data.snapshot.activeUsers, data.snapshot.totalAccounts, data.snapshot.activeWindow.days], [0, 0, 30]);
+    assert.deepEqual(data.learningDistribution, { totalModules: 0, milestones: [] });
     assert.equal(data.verifier.flagRate, null); assert.equal(data.learning.completionRate, null);
     assert.equal(data.snapshot.verifiedPercent, null); assert.equal(data.status.systems.operational, null);
     assert.equal(data.trend.length, 7);
@@ -87,8 +93,8 @@ test("searches include every supported type, and guardian alerts exclude the use
     const data = await call(getExecutiveDashboard, "superadmin");
     assert.deepEqual(data.verifier.byType, { phone: 3, account: 1, email: 4, website: 2 });
     assert.equal(data.verifier.total, 10); assert.equal(data.verifier.numbers, 4); assert.equal(data.verifier.flagRate, 10);
+    const guardian = await guardianAlerts({ from: new Date("2026-10-19T00:00:00Z"), to: new Date("2026-10-20T00:00:00Z") });
     assert.deepEqual(guardianMatch.$expr, { $ne: ["$recipient", "$sender"] });
-    const guardian = data.panics.guardianAlertsToday;
     assert.deepEqual([guardian.total, guardian.fromSos, guardian.fromGuardianPanic, guardian.push.accepted, guardian.push.failed], [5, 3, 2, 4, 1]);
   } finally { restore(); }
 });
@@ -144,5 +150,39 @@ test("learning counts each user and module once: completed when the quiz is subm
     assert.deepEqual(learning.mostPopular, { title: "Breach flow basics", completions: 2, opens: 2 });
     const data = await call(getExecutiveDashboard, "superadmin");
     assert.deepEqual(Object.keys(data.learning).sort(), ["completed", "completionRate", "mostPopular", "notCompleted", "openTrackingSince", "opened"]);
+  } finally { restore(); }
+});
+
+test("module completion milestones are spread from one module to all of them, without duplicates", () => {
+  assert.deepEqual(completionMilestones(0), []);
+  assert.deepEqual(completionMilestones(1), [1]);
+  assert.deepEqual(completionMilestones(3), [1, 2, 3]);
+  assert.deepEqual(completionMilestones(5), [1, 2, 3, 4, 5]);
+  assert.deepEqual(completionMilestones(6), [1, 2, 4, 5, 6]);
+  assert.deepEqual(completionMilestones(10), [1, 3, 6, 8, 10]);
+  assert.deepEqual(completionMilestones(20), [1, 6, 11, 15, 20]);
+  assert.deepEqual(completionMilestones(50), [1, 13, 26, 38, 50]);
+  for (let modules = 1; modules <= 200; modules++) {
+    const milestones = completionMilestones(modules);
+    assert.equal(milestones[0], 1); assert.equal(milestones.at(-1), modules);
+    assert.equal(milestones.length, Math.min(5, modules));
+    assert.ok(milestones.every((value, index) => !index || value > milestones[index - 1]));
+  }
+});
+
+test("module completion distribution is cumulative: a user counts at every milestone they reached", async () => {
+  const modules = Array.from({ length: 10 }, (_, index) => `m${index}`);
+  let match;
+  // Per completed-module count: 3 users completed 1, 2 completed 4, 1 completed all 10.
+  const restore = stubAll([
+    [Learning, "distinct", async () => modules],
+    [LearningAttempt, "aggregate", async pipeline => { match = matchOf(pipeline); return [{ _id: 1, users: 3 }, { _id: 4, users: 2 }, { _id: 10, users: 1 }]; }],
+  ]);
+  try {
+    const data = await call(getExecutiveDashboard, "superadmin");
+    assert.deepEqual(match, { learning: { $in: modules } });
+    assert.deepEqual(data.learningDistribution, { totalModules: 10, milestones: [
+      { minimum: 1, users: 6 }, { minimum: 3, users: 3 }, { minimum: 6, users: 1 }, { minimum: 8, users: 1 }, { minimum: 10, users: 1 },
+    ] });
   } finally { restore(); }
 });

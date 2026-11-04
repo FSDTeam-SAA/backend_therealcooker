@@ -5,6 +5,7 @@ import mongoose from "mongoose";
 import { User } from "../model/user.model.js";
 import { Verification } from "../model/verification.model.js";
 import { OperationEvent } from "../model/operation.model.js";
+import { VerificationFeedback } from "../model/verificationFeedback.model.js";
 import { optionalAuth } from "../middleware/auth.middleware.js";
 import { checkVerification } from "../controller/verification.controller.js";
 import { maskSearchValue } from "../utils/maskSearchValue.js";
@@ -39,7 +40,8 @@ test("optional auth attaches a valid user and never rejects anonymous or bad tok
 test("a search records the type, result, user and masked value, and the response is unchanged", async () => {
   const state = Object.getOwnPropertyDescriptor(mongoose.connection, "readyState");
   Object.defineProperty(mongoose.connection, "readyState", { configurable: true, get: () => 1 });
-  const originals = { findOne: Verification.findOne, create: OperationEvent.create };
+  const originals = { findOne: Verification.findOne, create: OperationEvent.create, feedback: VerificationFeedback.findOne };
+  VerificationFeedback.findOne = () => ({ select() { return this; }, lean: async () => null });
   const recorded = [];
   OperationEvent.create = async data => { recorded.push(data); return data; };
   Verification.findOne = () => ({ sort() { return this; }, lean: async () => null });
@@ -51,8 +53,9 @@ test("a search records the type, result, user and masked value, and the response
     assert.equal(body.status, "not_found"); assert.equal(body.data.value, "27119990000");
     assert.deepEqual({ ...recorded[0] }, { kind: "verification_lookup", tool: "phone", outcome: "not_found", source: "moneykee", user: userId, maskedValue: "271•••••0000" });
     assert.ok(!JSON.stringify(recorded).includes("27119990000"), "the full value is never stored");
+    assert.deepEqual(body.data.feedback, { yourVote: null }, "a user who has not voted can give feedback");
   } finally {
-    Verification.findOne = originals.findOne; OperationEvent.create = originals.create;
+    Verification.findOne = originals.findOne; OperationEvent.create = originals.create; VerificationFeedback.findOne = originals.feedback;
     state ? Object.defineProperty(mongoose.connection, "readyState", state) : delete mongoose.connection.readyState;
   }
 });
