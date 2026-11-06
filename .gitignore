@@ -4,7 +4,6 @@ branch_structure.json
 temp_auto_push.bat
 temp_interactive_push.bat
 .gitignore
-.env
 
 # Firebase Admin SDK service account key — secret credential, never commit
 moneykee-930a2-firebase-adminsdk-fbsvc-43bcd2f3a1.json
