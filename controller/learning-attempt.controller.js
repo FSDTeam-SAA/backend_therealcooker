@@ -78,6 +78,9 @@ async function list(req, res, filter, admin) {
   respond(res, { attempts, summary: admin ? { totalAttempts: total, uniqueUsers: stats[0]?.uniqueUsers || 0, averageScore: stats[0]?.averageScore || 0 } : undefined, pagination: { page, limit, total, totalPages: Math.ceil(total / limit) || 1 } });
 }
 export const getMyAttempts = catchAsync(async (req, res) => list(req, res, { learning: validId(req.params.id), user: req.user._id }, false));
+// Which lessons this user has finished. Requires a valid token on purpose: on the optional-auth feed an
+// expired token would read as a guest, and the user's Completed tags would briefly disappear.
+export const getMyCompletedLearnings = catchAsync(async (req, res) => respond(res, { learningIds: await LearningAttempt.distinct("learning", { user: req.user._id }) }));
 export const getAdminAttempts = catchAsync(async (req, res) => list(req, res, { learning: validId(req.params.id) }, true));
 export const getUserAttempts = catchAsync(async (req, res) => list(req, res, { user: validId(req.params.userId) }, false));
 export const getAttemptDetails = catchAsync(async (req, res) => {

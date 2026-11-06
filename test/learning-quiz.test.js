@@ -3,7 +3,7 @@ import test from "node:test";
 import { normalizeQuestions, gradeAnswers } from "../utils/learningQuiz.js";
 import { Learning } from "../model/learning.model.js";
 import { LearningAttempt } from "../model/learning-attempt.model.js";
-import { getQuiz, submitAttempt, getMyAttempts } from "../controller/learning-attempt.controller.js";
+import { getQuiz, submitAttempt, getMyAttempts, getMyCompletedLearnings } from "../controller/learning-attempt.controller.js";
 import { toPublicLearningDto } from "../controller/learning.controller.js";
 import { updateLearning } from "../controller/learning.controller.js";
 import { User } from "../model/user.model.js";
@@ -84,6 +84,18 @@ test("user history query is scoped to authenticated user", async () => {
     assert.equal(result.data.pagination.total, 0);
   } finally { LearningAttempt.countDocuments = count; LearningAttempt.find = find; }
 });
+test("completed lessons come only from the authenticated user's attempts", async () => {
+  const distinct = LearningAttempt.distinct;
+  LearningAttempt.distinct = async (field, filter) => {
+    assert.equal(field, "learning");
+    assert.deepEqual(filter, { user: userId });
+    return [learningId];
+  };
+  try {
+    const result = await call(getMyCompletedLearnings, { user: { _id: userId }, query: { user: "spoofed" } });
+    assert.deepEqual(result.data, { learningIds: [learningId] });
+  } finally { LearningAttempt.distinct = distinct; }
+});
 test("quiz edits increment version while unchanged questions preserve version", async () => {
   const find = Learning.findById;
   const document = new Learning({ title: "Lesson", description: "Content", questions, quizVersion: 2 });
@@ -116,6 +128,7 @@ test("routers deny anonymous quiz submissions and non-admin access to answer key
   const denied = (router, method, url, authorization) => new Promise(resolve => router.handle({ method, url, headers: authorization ? { authorization } : {} }, {}, resolve));
   try {
     assert.equal((await denied(materialRouter, "POST", `/${learningId}/attempts`)).statusCode, 401);
+    assert.equal((await denied(materialRouter, "GET", "/completed/me")).statusCode, 401);
     assert.equal((await denied(learningRouter, "GET", "/", `Bearer ${token}`)).statusCode, 403);
     assert.equal((await denied(learningRouter, "GET", `/${learningId}`, `Bearer ${token}`)).statusCode, 403);
     assert.equal((await denied(adminRouter, "GET", `/learning-attempts/${learningId}`, `Bearer ${token}`)).statusCode, 403);
