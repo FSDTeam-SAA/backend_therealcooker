@@ -5,15 +5,16 @@ import catchAsync from "../utils/catchAsync.js";
 import sendResponse from "../utils/sendResponse.js";
 import { VerificationFeedback, VerificationVote, VOTE_VERDICTS } from "../model/verificationFeedback.model.js";
 import { LOOKUP_TYPES, normalizeVerificationValue, validateLookupValue } from "./verification.controller.js";
-import { recordVote, reviewFeedback, REVIEW_ACTIONS, minimumVotes } from "../utils/communityVotes.js";
+import { recordVote, reviewFeedback, REVIEW_ACTIONS, REQUIRED_VOTES } from "../utils/communityVotes.js";
 import { DAY, escapeRegex, pageOptions } from "../utils/reporting.js";
 import { reportingPeriod } from "../utils/reportingPeriods.js";
 
 const respond = (res, data, message = "Feedback fetched successfully", statusCode = httpStatus.OK) => sendResponse(res, { statusCode, success: true, message, data });
 const validId = id => { if (!mongoose.isValidObjectId(id)) throw new AppError(httpStatus.BAD_REQUEST, "Invalid ID"); return id; };
 
-// App users: one vote on a contact the verifier had no record of. The value is normalized like the
-// lookup, so every way of typing the same contact counts toward one record.
+// App users: one vote on a contact the verifier had no record of, while it is still collecting votes.
+// The value is normalized like the lookup, so every way of typing the same contact counts toward one
+// record. The response says whether this vote closed voting, never how others voted.
 export const submitFeedback = catchAsync(async (req, res) => {
   const type = String(req.body?.type ?? "").trim().toLowerCase();
   if (!LOOKUP_TYPES.has(type)) throw new AppError(httpStatus.BAD_REQUEST, "Type must be one of: email, phone, account, website");
@@ -23,8 +24,8 @@ export const submitFeedback = catchAsync(async (req, res) => {
   const value = normalizeVerificationValue(rawValue, type);
   validateLookupValue(value, type, rawValue);
 
-  const { vote } = await recordVote({ type, value, displayValue: String(rawValue).trim().slice(0, 200), user: req.user._id, verdict });
-  respond(res, { type, value, verdict: vote.verdict, submittedAt: vote.createdAt }, "Thanks, your feedback was recorded", httpStatus.CREATED);
+  const { vote, feedback } = await recordVote({ type, value, displayValue: String(rawValue).trim().slice(0, 200), user: req.user._id, verdict });
+  respond(res, { type, value, verdict: vote.verdict, submittedAt: vote.createdAt, status: feedback.status }, "Thanks, your feedback was recorded", httpStatus.CREATED);
 });
 
 const STATUSES = ["collecting", "needs_review", "resolved"];
@@ -50,7 +51,7 @@ export const listFeedback = catchAsync(async (req, res) => {
   respond(res, {
     items, pagination: { page, limit, total, totalPages: Math.max(1, Math.ceil(total / limit)) },
     summary: { contacts, votesThisWeek, weekLabel: week.label, awaitingReview, markedScam },
-    minimumVotes: minimumVotes(),
+    requiredVotes: REQUIRED_VOTES,
   });
 });
 
@@ -62,16 +63,16 @@ export const getFeedback = catchAsync(async (req, res) => {
     VerificationVote.find({ feedback: id }).sort({ createdAt: -1 }).limit(100).select("verdict createdAt").lean(),
   ]);
   if (!feedback) throw new AppError(httpStatus.NOT_FOUND, "Feedback record not found");
-  respond(res, { ...feedback, history: [...feedback.history].reverse(), votes: votes.map(vote => ({ id: vote._id, verdict: vote.verdict, createdAt: vote.createdAt })), minimumVotes: minimumVotes() });
+  respond(res, { ...feedback, history: [...feedback.history].reverse(), votes: votes.map(vote => ({ id: vote._id, verdict: vote.verdict, createdAt: vote.createdAt })), requiredVotes: REQUIRED_VOTES });
 });
 
 export const reviewFeedbackDecision = catchAsync(async (req, res) => {
   const id = validId(req.params.id);
   const action = req.body?.action;
-  if (!Object.hasOwn(REVIEW_ACTIONS, action)) throw new AppError(httpStatus.BAD_REQUEST, "Action must be one of: verify, flag, collect");
+  if (!Object.hasOwn(REVIEW_ACTIONS, action)) throw new AppError(httpStatus.BAD_REQUEST, "Action must be one of: verify, flag, hold");
   const reason = typeof req.body?.reason === "string" ? req.body.reason.trim() : "";
-  if (action !== "collect" && !reason) throw new AppError(httpStatus.BAD_REQUEST, "Give a short reason for this decision");
+  if (action !== "hold" && !reason) throw new AppError(httpStatus.BAD_REQUEST, "Give a short reason for this decision");
   if (reason.length > 2000) throw new AppError(httpStatus.BAD_REQUEST, "Reason must be 2000 characters or fewer");
   const feedback = await reviewFeedback(id, { action, reason: reason || undefined, admin: req.user._id });
-  respond(res, feedback, action === "collect" ? "The contact keeps collecting votes" : "Decision saved");
+  respond(res, feedback, action === "hold" ? "The contact stays pending review" : "Decision saved");
 });
