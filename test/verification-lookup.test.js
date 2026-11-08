@@ -7,6 +7,7 @@ import {
   normalizeVerificationValue,
 } from "../controller/verification.controller.js";
 import { Verification } from "../model/verification.model.js";
+import { VerificationFeedback, VerificationVote } from "../model/verificationFeedback.model.js";
 
 const callController = (handler, req) =>
   new Promise((resolve, reject) => {
@@ -24,8 +25,13 @@ const callController = (handler, req) =>
     handler(req, res, reject);
   });
 
-const withLookupRecord = async (record, callback) => {
+const withLookupRecord = async (record, callback, feedback = null, vote = null) => {
   const originalFindOne = Verification.findOne;
+  const originalFeedback = VerificationFeedback.findOne;
+  const originalVote = VerificationVote.findOne;
+  const query = (result) => () => ({ select() { return this; }, lean: async () => result });
+  VerificationFeedback.findOne = query(feedback);
+  VerificationVote.findOne = query(vote);
   let capturedFilter;
   Verification.findOne = (filter) => {
     capturedFilter = filter;
@@ -43,6 +49,8 @@ const withLookupRecord = async (record, callback) => {
     await callback(() => capturedFilter);
   } finally {
     Verification.findOne = originalFindOne;
+    VerificationFeedback.findOne = originalFeedback;
+    VerificationVote.findOne = originalVote;
   }
 };
 
@@ -112,4 +120,31 @@ test("public lookup returns a clean not_found verdict with HTTP 200", async () =
     assert.equal(response.body.status, "not_found");
     assert.equal(response.body.data.details, null);
   });
+});
+
+test("a contact still collecting votes is not found and takes feedback", async () => {
+  await withLookupRecord(null, async () => {
+    const response = await callController(checkVerification, {
+      body: { value: "www.moneykey.com", type: "website" },
+      query: {},
+      user: { _id: "507f1f77bcf86cd799439011" },
+    });
+
+    assert.equal(response.body.status, "not_found");
+    assert.match(response.body.message, /No record found/);
+    assert.deepEqual(response.body.data.feedback, { yourVote: "suspicious", status: "collecting", acceptingVotes: true });
+  }, { _id: "feedback-1", status: "collecting" }, { verdict: "suspicious" });
+});
+
+test("a contact whose closed vote went to an admin is reported as under review and takes no votes", async () => {
+  await withLookupRecord(null, async () => {
+    const response = await callController(checkVerification, {
+      body: { value: "support@example.com", type: "email" },
+      query: {},
+    });
+
+    assert.equal(response.body.status, "not_found");
+    assert.match(response.body.message, /reviewing/);
+    assert.deepEqual(response.body.data.feedback, { yourVote: null, status: "needs_review", acceptingVotes: false });
+  }, { _id: "feedback-2", status: "needs_review" });
 });

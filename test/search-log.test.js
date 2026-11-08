@@ -53,7 +53,7 @@ test("a search records the type, result, user and masked value, and the response
     assert.equal(body.status, "not_found"); assert.equal(body.data.value, "27119990000");
     assert.deepEqual({ ...recorded[0] }, { kind: "verification_lookup", tool: "phone", outcome: "not_found", source: "moneykee", user: userId, maskedValue: "271•••••0000" });
     assert.ok(!JSON.stringify(recorded).includes("27119990000"), "the full value is never stored");
-    assert.deepEqual(body.data.feedback, { yourVote: null }, "a user who has not voted can give feedback");
+    assert.deepEqual(body.data.feedback, { yourVote: null, status: "collecting", acceptingVotes: true }, "a user who has not voted can give feedback");
   } finally {
     Verification.findOne = originals.findOne; OperationEvent.create = originals.create; VerificationFeedback.findOne = originals.feedback;
     state ? Object.defineProperty(mongoose.connection, "readyState", state) : delete mongoose.connection.readyState;

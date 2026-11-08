@@ -6,12 +6,13 @@
   "type": "module",
   "scripts": {
     "test": "node --test test/*.test.js",
-    "start": "node server.js",
+    "start": "node init && node server.js",
     "stop": "sh ./scripts/free-port.sh",
     "predev": "npm run stop",
-    "dev": "nodemon --no-stdin server.js",
+    "dev": "node init && nodemon --no-stdin server.js",
     "seed:demo-feeds": "node scripts/seed-demo-feeds.js",
-    "seed:banks": "node scripts/seed-bank-catalog.js"
+    "seed:banks": "node scripts/seed-bank-catalog.js",
+    "migrate:community-consensus": "node scripts/migrate-community-consensus.js"
   },
   "author": "",
   "license": "ISC",
