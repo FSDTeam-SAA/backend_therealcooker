@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { decide, voteOutcome, tally, minimumVotes, REVIEW_ACTIONS } from "../utils/communityVotes.js";
+import { decide, voteOutcome, tally, REQUIRED_VOTES, REVIEW_ACTIONS } from "../utils/communityVotes.js";
 import { reviewFeedbackDecision, submitFeedback } from "../controller/verification-feedback.controller.js";
 import { routePermission, can } from "../utils/adminPermissions.js";
 
@@ -15,31 +15,57 @@ test("the leading verdict needs strictly more votes than each other one", () => 
   assert.equal(voteOutcome(counts(0, 0, 0)), "none");
 });
 
-test("clear Legitimate or Suspicious leads become verdicts; ties and Not sure go to review", () => {
-  assert.deepEqual(decide(counts(2, 5, 1), null, 1), { outcome: "suspicious", status: "resolved", verdict: "suspicious" });
-  assert.deepEqual(decide(counts(3, 2, 0), null, 1), { outcome: "legitimate", status: "resolved", verdict: "legitimate" });
-  assert.deepEqual(decide(counts(3, 3, 0), null, 1), { outcome: "tie", status: "needs_review", verdict: null });
-  assert.deepEqual(decide(counts(2, 1, 5), null, 1), { outcome: "not_sure", status: "needs_review", verdict: null });
+const open = outcome => ({ outcome, status: "collecting", verdict: null, reason: null });
+const verdict = outcome => ({ outcome, status: "resolved", verdict: outcome, reason: null });
+const review = (outcome, reason) => ({ outcome, status: "needs_review", verdict: null, reason });
+
+test("the consensus needs exactly 30 unique users", () => {
+  assert.equal(REQUIRED_VOTES, 30);
 });
 
-test("unclear votes never replace an established verdict, and votes never change an admin decision", () => {
-  const community = { verdict: "suspicious", by: "community" };
-  assert.deepEqual(decide(counts(1, 1, 3), community, 1), { outcome: "not_sure", status: "needs_review", verdict: null });
-  assert.deepEqual(decide(counts(2, 2, 0), community, 1), { outcome: "tie", status: "needs_review", verdict: null });
-  assert.deepEqual(decide(counts(4, 1, 0), community, 1).verdict, "legitimate", "a clear new lead replaces a community verdict");
+test("nothing is decided before the 30th vote, however one-sided the votes are", () => {
+  assert.deepEqual(decide(counts(0, 1, 0), null), open("suspicious"), "a first Suspicious vote decides nothing");
+  assert.deepEqual(decide(counts(2, 2, 1), null), open("tie"), "five mixed votes decide nothing");
+  assert.deepEqual(decide(counts(29, 0, 0), null), open("legitimate"), "29 identical votes decide nothing");
+  assert.deepEqual(decide(counts(0, 29, 0), null), open("suspicious"));
+  assert.deepEqual(decide(counts(0, 0, 29), null), open("not_sure"), "Not sure leading early does not go to review");
+  assert.deepEqual(decide(counts(14, 15, 0), null), open("suspicious"));
+});
+
+test("at 30 votes the unique leader decides: Legitimate verifies, Suspicious flags, anything else goes to review", () => {
+  const table = [
+    [counts(20, 7, 3), verdict("legitimate")],
+    [counts(5, 22, 3), verdict("suspicious")],
+    [counts(5, 5, 20), review("not_sure", "not_sure_leads")],
+    [counts(8, 2, 20), review("not_sure", "not_sure_leads")],
+    [counts(2, 8, 20), review("not_sure", "not_sure_leads")],
+    [counts(15, 15, 0), review("tie", "tie")],
+    [counts(10, 10, 10), review("tie", "tie")],
+    [counts(12, 11, 7), verdict("legitimate")],
+    [counts(11, 12, 7), verdict("suspicious")],
+    [counts(12, 6, 12), review("tie", "tie")],
+    [counts(6, 12, 12), review("tie", "tie")],
+    [counts(30, 0, 0), verdict("legitimate")],
+    [counts(0, 0, 30), review("not_sure", "not_sure_leads")],
+  ];
+  for (const [votes, expected] of table) assert.deepEqual(decide(votes, null), expected, JSON.stringify(votes));
+});
+
+test("the unique leader wins without a majority", () => {
+  assert.equal(decide(counts(11, 10, 9), null).verdict, "legitimate", "11 of 30 is enough when it leads alone");
+  assert.equal(decide(counts(10, 11, 9), null).verdict, "suspicious");
+});
+
+test("votes never change an admin decision, before or after 30 votes", () => {
   const admin = { verdict: "legitimate", by: "admin" };
-  for (const votes of [counts(0, 9, 0), counts(0, 0, 9), counts(2, 2, 0)]) assert.deepEqual(decide(votes, admin, 1), { outcome: voteOutcome(votes), status: "resolved", verdict: null });
+  for (const votes of [counts(0, 1, 0), counts(0, 30, 0), counts(0, 0, 30), counts(15, 15, 0)]) {
+    assert.deepEqual(decide(votes, admin), { outcome: voteOutcome(votes), status: "resolved", verdict: null, reason: null });
+  }
 });
 
-test("a minimum vote count holds back a verdict until it is reached", () => {
-  assert.deepEqual(decide(counts(0, 2, 0), null, 3), { outcome: "suspicious", status: "collecting", verdict: null });
+test("the required number can be passed explicitly", () => {
+  assert.deepEqual(decide(counts(0, 2, 0), null, 3), open("suspicious"));
   assert.equal(decide(counts(0, 3, 0), null, 3).verdict, "suspicious");
-  const previous = process.env.COMMUNITY_VOTE_MIN_VOTES;
-  try {
-    delete process.env.COMMUNITY_VOTE_MIN_VOTES; assert.equal(minimumVotes(), 1);
-    process.env.COMMUNITY_VOTE_MIN_VOTES = "5"; assert.equal(minimumVotes(), 5);
-    process.env.COMMUNITY_VOTE_MIN_VOTES = "nonsense"; assert.equal(minimumVotes(), 1);
-  } finally { previous === undefined ? delete process.env.COMMUNITY_VOTE_MIN_VOTES : process.env.COMMUNITY_VOTE_MIN_VOTES = previous; }
 });
 
 test("tally fills in verdicts nobody chose", () => {
@@ -55,8 +81,9 @@ test("requests are validated before anything is stored", async () => {
   const id = "507f1f77bcf86cd799439012";
   await assert.rejects(call(reviewFeedbackDecision, { user, params: { id }, body: { action: "toString" } }), /Action must be/);
   await assert.rejects(call(reviewFeedbackDecision, { user, params: { id }, body: { action: "verify" } }), /reason/);
-  await assert.rejects(call(reviewFeedbackDecision, { user, params: { id: "nope" }, body: { action: "collect" } }), /Invalid ID/);
-  assert.deepEqual(Object.keys(REVIEW_ACTIONS), ["verify", "flag", "collect"]);
+  await assert.rejects(call(reviewFeedbackDecision, { user, params: { id: "nope" }, body: { action: "hold" } }), /Invalid ID/);
+  await assert.rejects(call(reviewFeedbackDecision, { user, params: { id }, body: { action: "collect" } }), /Action must be/);
+  assert.deepEqual(Object.keys(REVIEW_ACTIONS), ["verify", "flag", "hold"]);
 });
 
 test("reading feedback needs verification:read and deciding needs verification:write", () => {

@@ -20,11 +20,17 @@ const feedbackSchema = new Schema({
   },
   // Which verdict the votes currently favour: none (no votes), tie, or the single leading verdict.
   outcome: { type: String, enum: ["none", "tie", ...VOTE_VERDICTS], default: "none" },
-  // collecting: no decision yet. needs_review: Not sure leads or the leaders are tied.
-  // resolved: a verdict is in the verifier, set by the community or an admin.
+  // collecting: fewer than the required number of users have voted; nothing is decided yet.
+  // needs_review: voting closed at the required number with Not sure leading or the lead tied.
+  // resolved: a verdict is in the verifier, set by the closed community vote or an admin.
+  // Only collecting contacts take votes.
   status: { type: String, enum: ["collecting", "needs_review", "resolved"], default: "collecting" },
-  // The verdict currently applied to the verifier. It stays when later votes become unclear: an
-  // established verdict is only replaced by another clear verdict or an admin decision.
+  // Why a closed vote was sent to an admin: Not sure has the most votes, or the most votes are shared.
+  reviewReason: { type: String, enum: ["not_sure_leads", "tie"] },
+  // When the vote that reached the required number closed community voting.
+  closedAt: Date,
+  // The verdict applied to the verifier, by the closed community vote or an admin. An admin
+  // decision is final: no later vote or community evaluation replaces it.
   resolution: {
     verdict: { type: String, enum: ["legitimate", "suspicious"] },
     by: { type: String, enum: ["community", "admin"] },
@@ -33,7 +39,9 @@ const feedbackSchema = new Schema({
   verification: ref("Verification"),
   history: [{
     _id: false,
-    action: { type: String, enum: ["community_verdict", "review_required", "admin_verified", "admin_flagged", "keep_collecting"], required: true },
+    // keep_collecting is only found on records from before the consensus threshold. consensus_reset
+    // marks a contact that one vote had decided under the old rules and that went back to collecting.
+    action: { type: String, enum: ["community_verdict", "review_required", "admin_verified", "admin_flagged", "keep_collecting", "kept_pending", "consensus_reset"], required: true },
     by: { type: String, enum: ["community", "admin"], required: true },
     admin: ref("User"), reason: { type: String, maxlength: 2000 },
     counts: { legitimate: Number, suspicious: Number, not_sure: Number, total: Number },

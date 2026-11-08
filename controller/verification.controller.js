@@ -187,11 +187,15 @@ export const checkVerification = catchAsync(async (req, res) => {
 
   if (!record) {
     await recordEvent({ kind: "verification_lookup", tool: type, outcome: "not_found", source: "moneykee", user: req.user?._id, maskedValue: maskSearchValue(type, normalizedValue) });
-    const message =
-      "No record found for this information in our database. Exercise caution.";
-    // Not-found contacts can take community feedback; a signed-in user sees whether they already voted.
-    const feedback = req.user ? await VerificationFeedback.findOne({ type, value: normalizedValue }).select("_id").lean() : null;
-    const previousVote = feedback ? await VerificationVote.findOne({ feedback: feedback._id, user: req.user._id }).select("verdict").lean() : null;
+    // Not-found contacts collect community feedback until enough users have voted; an unfinished
+    // vote is never shown as a result. A closed vote that went to an admin is reported as under
+    // review. A signed-in user sees whether they already voted.
+    const feedback = await VerificationFeedback.findOne({ type, value: normalizedValue }).select("_id status").lean();
+    const previousVote = feedback && req.user ? await VerificationVote.findOne({ feedback: feedback._id, user: req.user._id }).select("verdict").lean() : null;
+    const feedbackStatus = feedback?.status || "collecting";
+    const message = feedbackStatus === "needs_review"
+      ? "MoneyKee users who checked this could not agree, so our team is reviewing it. Exercise caution."
+      : "No record found for this information in our database. Exercise caution.";
     return res.status(httpStatus.OK).json({
       success: true,
       status: "not_found",
@@ -202,7 +206,7 @@ export const checkVerification = catchAsync(async (req, res) => {
         value: normalizedValue,
         details: null,
         message,
-        feedback: { yourVote: previousVote?.verdict || null },
+        feedback: { yourVote: previousVote?.verdict || null, status: feedbackStatus, acceptingVotes: feedbackStatus === "collecting" },
       },
     });
   }
