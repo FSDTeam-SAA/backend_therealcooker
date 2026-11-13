@@ -313,10 +313,10 @@ export const createGuardian = catchAsync(async (req, res) => {
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
     throw new AppError(httpStatus.BAD_REQUEST, "Enter a valid email address");
   }
-  if (!/^0\d{9}$/.test(phone)) {
+  if (!/^\+?\d{6,15}$/.test(String(phone).trim())) {
     throw new AppError(
       httpStatus.BAD_REQUEST,
-      "Phone number must be 10 digits and begin with 0"
+      "Enter a valid phone number"
     );
   }
 
@@ -495,10 +495,10 @@ export const updateGuardian = catchAsync(async (req, res) => {
     guardian.email = email;
   }
   if (phone) {
-    if (!/^0\d{9}$/.test(phone)) {
+    if (!/^\+?\d{6,15}$/.test(String(phone).trim())) {
       throw new AppError(
         httpStatus.BAD_REQUEST,
-        "Phone number must be 10 digits and begin with 0"
+        "Enter a valid phone number"
       );
     }
     guardian.phone = phone;

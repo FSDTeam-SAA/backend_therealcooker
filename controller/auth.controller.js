@@ -71,10 +71,10 @@ export const register = catchAsync(async (req, res) => {
     throw new AppError(httpStatus.BAD_REQUEST, "Enter a valid email address");
   }
 
-  if (!/^0\d{9}$/.test(phone)) {
+  if (!/^\+?\d{6,15}$/.test(String(phone).trim())) {
     throw new AppError(
       httpStatus.BAD_REQUEST,
-      "Phone number must be 10 digits and begin with 0"
+      "Enter a valid phone number"
     );
   }
 
