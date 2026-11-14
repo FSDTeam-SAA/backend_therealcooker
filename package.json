@@ -6,10 +6,10 @@
   "type": "module",
   "scripts": {
     "test": "node --test test/*.test.js",
-    "start": "node init && node server.js",
+    "start": "node server.js",
     "stop": "sh ./scripts/free-port.sh",
     "predev": "npm run stop",
-    "dev": "node init && nodemon --no-stdin server.js",
+    "dev": "nodemon --no-stdin server.js",
     "seed:demo-feeds": "node scripts/seed-demo-feeds.js",
     "seed:banks": "node scripts/seed-bank-catalog.js"
   },
