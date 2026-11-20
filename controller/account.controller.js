@@ -495,6 +495,133 @@ export const createAccount = catchAsync(async (req, res) => {
   });
 });
 
+// Save one or multiple bank account info entries (bankName + bankAccountType) during onboarding
+export const createAccountInfo = catchAsync(async (req, res) => {
+  const rawItems = Array.isArray(req.body?.accounts)
+    ? req.body.accounts
+    : Array.isArray(req.body?.banks)
+    ? req.body.banks
+    : req.body?.bankName
+    ? [req.body]
+    : [];
+
+  if (rawItems.length === 0) {
+    throw new AppError(
+      httpStatus.BAD_REQUEST,
+      "At least one bank account is required"
+    );
+  }
+
+  const validatedEntries = [];
+  for (const item of rawItems) {
+    const bankName =
+      typeof item?.bankName === "string" ? item.bankName.trim() : "";
+    const bankAccountType =
+      typeof item?.bankAccountType === "string"
+        ? item.bankAccountType.trim()
+        : typeof item?.accountType === "string" &&
+          BANK_ACCOUNT_TYPES.includes(item.accountType.trim())
+        ? item.accountType.trim()
+        : "";
+
+    if (!bankName) {
+      throw new AppError(
+        httpStatus.BAD_REQUEST,
+        "Bank name is required for bank accounts"
+      );
+    }
+    if (!BANK_ACCOUNT_TYPES.includes(bankAccountType)) {
+      throw new AppError(
+        httpStatus.BAD_REQUEST,
+        `Bank account type is required and must be one of: ${BANK_ACCOUNT_TYPES.join(", ")}`
+      );
+    }
+
+    const catalogBank = await Bank.findOne({
+      nameKey: bankName.replace(/\s+/g, " ").toLocaleLowerCase("en"),
+      isActive: true,
+    });
+    if (!catalogBank) {
+      throw new AppError(
+        httpStatus.BAD_REQUEST,
+        "Select an available bank from the bank list"
+      );
+    }
+
+    validatedEntries.push({
+      catalogBank,
+      bankAccountType,
+      nickname: typeof item?.nickname === "string" ? item.nickname.trim() : "",
+    });
+  }
+
+  const createdAccounts = [];
+  for (const entry of validatedEntries) {
+    const account = await Account.create({
+      user: req.user._id,
+      accountType: "bank",
+      bankName: entry.catalogBank.name,
+      bankAccountType: entry.bankAccountType,
+      nickname: entry.nickname,
+      accountNumberEncrypted: "",
+      imageUrl: entry.catalogBank.logo?.url || "",
+    });
+    createdAccounts.push(account);
+  }
+
+  const guardians = await Guardian.find({
+    user: req.user._id,
+    status: { $in: ["pending", "accepted"] },
+  });
+  const acceptedGuardians = guardians.filter(
+    (guardian) => guardian.status === "accepted"
+  );
+  if (acceptedGuardians.length > 0 && createdAccounts.length > 0) {
+    const links = [];
+    for (const guardian of acceptedGuardians) {
+      for (const account of createdAccounts) {
+        links.push({
+          guardian: guardian._id,
+          account: account._id,
+        });
+      }
+    }
+    await GuardianAccount.insertMany(links, { ordered: false }).catch(() => {});
+  }
+
+  const pendingGuardians = guardians.filter(
+    (guardian) => guardian.status === "pending"
+  );
+  await Promise.all(
+    pendingGuardians.map(async (guardian) => {
+      const requestedIds = new Set(
+        (guardian.requestedAccounts || []).map((id) => String(id))
+      );
+      let changed = false;
+      for (const account of createdAccounts) {
+        if (!requestedIds.has(String(account._id))) {
+          guardian.requestedAccounts = [
+            ...(guardian.requestedAccounts || []),
+            account._id,
+          ];
+          requestedIds.add(String(account._id));
+          changed = true;
+        }
+      }
+      if (changed) {
+        await guardian.save();
+      }
+    })
+  );
+
+  sendResponse(res, {
+    statusCode: httpStatus.CREATED,
+    success: true,
+    message: "Account info saved successfully",
+    data: createdAccounts,
+  });
+});
+
 // Get all accounts of logged-in user (with optional guardian info)
 export const getAccounts = catchAsync(async (req, res) => {
   const accounts = await Account.find({ user: req.user._id, isActive: true });

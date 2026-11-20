@@ -1,6 +1,7 @@
 import express from "express";
 import {
   createAccount,
+  createAccountInfo,
   getAccounts,
   getAccount,
   getEmergencyStatus,
@@ -31,6 +32,8 @@ router.use(protect); // All routes require authentication
 router.route("/")
   .post(upload.single("image"), createAccount)
   .get(getAccounts);
+
+router.post("/account-info", createAccountInfo);
 
 router.get("/emergency/status", getEmergencyStatus);
 router.post("/emergency/activate", activateEmergencyMode);
