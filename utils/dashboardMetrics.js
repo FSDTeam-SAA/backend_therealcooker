@@ -117,7 +117,7 @@ export async function recentlyActiveUsers(now = new Date(), days = ACTIVE_WINDOW
 export async function totalAccounts() {
   const [row] = await Account.aggregate([
     { $match: { isActive: true } },
-    { $group: { _id: { user: "$user", type: "$accountType", bank: "$bankName", number: "$accountNumberEncrypted" } } },
+    { $group: { _id: { user: "$user", type: "$accountType", bank: "$bankName", bankAccountType: "$bankAccountType", number: "$accountNumberEncrypted" } } },
     { $lookup: { from: User.collection.collectionName, localField: "_id.user", foreignField: "_id", pipeline: [{ $match: { role: "user" } }, { $project: { _id: 1 } }], as: "owner" } },
     { $match: { "owner.0": { $exists: true } } },
     { $count: "count" },

@@ -38,7 +38,7 @@ const accountSchema = new Schema(
     },
     accountNumberEncrypted: {
       type: String,
-      required: true,
+      default: "",
       trim: true,
     },
     simulatedTransferLimit: {
