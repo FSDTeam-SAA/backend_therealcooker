@@ -44,7 +44,19 @@ export const getQuiz = catchAsync(async (req, res) => {
     { user: req.user._id, learning: learning._id, quizVersion: learning.quizVersion || 1 },
     { $setOnInsert: { startedAt: new Date() } }, { upsert: true }
   ));
-  respond(res, { learningId: learning._id, quizVersion: learning.quizVersion || 1, questions: learning.questions.map(q => ({ _id: q._id, question: q.question, options: q.options.map(o => ({ id: o.id, text: o.text })) })) });
+  respond(res, {
+    learningId: learning._id,
+    quizVersion: learning.quizVersion || 1,
+    questions: learning.questions.map(q => ({
+      _id: q._id,
+      ...(q.cycle !== undefined ? { cycle: q.cycle } : {}),
+      ...(q.cycleTitle ? { cycleTitle: q.cycleTitle } : {}),
+      ...(q.topicTitle ? { topicTitle: q.topicTitle } : {}),
+      question: q.question,
+      options: q.options.map(o => ({ id: o.id, text: o.text })),
+      ...(Array.isArray(q.profileTags) && q.profileTags.length ? { profileTags: q.profileTags } : {}),
+    })),
+  });
 });
 export const submitAttempt = catchAsync(async (req, res) => {
   const learning = await published(req.params.id);

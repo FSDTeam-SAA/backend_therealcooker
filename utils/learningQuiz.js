@@ -9,8 +9,8 @@ export function normalizeQuestions(raw) {
   if (!Array.isArray(questions) || questions.length > 100) throw new AppError(400, "Provide up to 100 questions");
   const ids = new Set();
   return questions.map((q) => {
-    if (!q || typeof q.question !== "string" || !q.question.trim() || !Array.isArray(q.options) || q.options.length !== 4) {
-      throw new AppError(400, "Each question needs text and four options");
+    if (!q || typeof q.question !== "string" || !q.question.trim() || !Array.isArray(q.options) || (q.options.length !== 3 && q.options.length !== 4)) {
+      throw new AppError(400, "Each question needs text and three or four options");
     }
     const id = q._id || new mongoose.Types.ObjectId().toString();
     if (!mongoose.isValidObjectId(id) || ids.has(String(id))) throw new AppError(400, "Invalid or duplicate question ID");
@@ -19,9 +19,26 @@ export function normalizeQuestions(raw) {
       if (!o || typeof o.id !== "string" || !o.id.trim() || typeof o.text !== "string" || !o.text.trim()) throw new AppError(400, "Each option needs an ID and text");
       return { id: o.id.trim(), text: o.text.trim() };
     });
-    if (new Set(options.map(o => o.id)).size !== 4 || !options.some(o => o.id === q.correctOptionId)) throw new AppError(400, "Choose one valid correct option");
+    if (new Set(options.map(o => o.id)).size !== options.length || !options.some(o => o.id === q.correctOptionId)) throw new AppError(400, "Choose one valid correct option");
     if (q.explanation !== undefined && typeof q.explanation !== "string") throw new AppError(400, "Explanation must be text");
-    return { _id: String(id), question: q.question.trim(), options, correctOptionId: q.correctOptionId, explanation: q.explanation?.trim() || "" };
+    if (q.momoSays !== undefined && typeof q.momoSays !== "string") throw new AppError(400, "Momo aside must be text");
+    const profileTags = Array.isArray(q.profileTags)
+      ? q.profileTags.map(t => String(t).trim()).filter(Boolean)
+      : typeof q.profileTags === "string"
+      ? q.profileTags.split("|").map(t => t.trim()).filter(Boolean)
+      : [];
+    return {
+      _id: String(id),
+      ...(q.cycle !== undefined ? { cycle: Number(q.cycle) } : {}),
+      ...(q.cycleTitle ? { cycleTitle: String(q.cycleTitle).trim() } : {}),
+      ...(q.topicTitle ? { topicTitle: String(q.topicTitle).trim() } : {}),
+      question: q.question.trim(),
+      options,
+      correctOptionId: q.correctOptionId,
+      explanation: q.explanation?.trim() || "",
+      momoSays: q.momoSays?.trim() || "",
+      profileTags,
+    };
   });
 }
 
@@ -36,6 +53,16 @@ export function gradeAnswers(questions, answers) {
   return questions.map(q => {
     const optionId = selected.get(String(q._id));
     if (!q.options.some(o => o.id === optionId)) throw new AppError(400, "Invalid question or option");
-    return { questionId: String(q._id), question: q.question, options: q.options.map(o => ({ id: o.id, text: o.text })), selectedOptionId: optionId, correctOptionId: q.correctOptionId, explanation: q.explanation || "", isCorrect: optionId === q.correctOptionId };
+    return {
+      questionId: String(q._id),
+      question: q.question,
+      options: q.options.map(o => ({ id: o.id, text: o.text })),
+      selectedOptionId: optionId,
+      correctOptionId: q.correctOptionId,
+      explanation: q.explanation || "",
+      momoSays: q.momoSays || "",
+      profileTags: Array.isArray(q.profileTags) ? q.profileTags : [],
+      isCorrect: optionId === q.correctOptionId,
+    };
   });
 }

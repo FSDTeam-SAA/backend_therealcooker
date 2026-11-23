@@ -16,6 +16,8 @@ import globalErrorHandler from "./middleware/globalErrorHandler.js";
 import notFound from "./middleware/notFound.js";
 import { operationalTracking } from "./middleware/operationalTracking.js";
 import { startAvailabilityMonitor } from "./utils/availability.js";
+import { Learning } from "./model/learning.model.js";
+import { seedLearningModules } from "./scripts/seed-learning-modules.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -134,6 +136,14 @@ const startServer = async () => {
     await mongoose.connect(process.env.MONGO_URI);
     startAvailabilityMonitor();
     console.log("MongoDB connected");
+    const numberedCount = await Learning.countDocuments({
+      moduleNumber: { $in: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10] },
+      isPublished: true,
+    });
+    if (numberedCount < 10) {
+      await seedLearningModules({ replaceAll: true });
+      console.log("Seeded 10 financial learning modules (100 questions)");
+    }
 
     // ONLY call server.listen ONCE here:
     server.listen(PORT, "0.0.0.0", () => {

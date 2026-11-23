@@ -7,6 +7,8 @@ const answerSchema = new Schema({
   selectedOptionId: { type: String, required: true },
   correctOptionId: { type: String, required: true },
   explanation: String,
+  momoSays: { type: String, default: "" },
+  profileTags: { type: [String], default: [] },
   isCorrect: { type: Boolean, required: true },
 }, { _id: false });
 const schema = new Schema({
