@@ -20,12 +20,27 @@ const call = (handler, req) => new Promise((resolve, reject) => {
   const res = { status(code) { status = code; return res; }, json(body) { resolve({ status, ...body }); } };
   handler(req, res, reject);
 });
-test("validates four options, IDs and answer keys before saving", () => {
+test("validates three or four options, IDs and answer keys before saving", () => {
   assert.throws(() => normalizeQuestions("bad json"), /JSON/);
-  assert.throws(() => normalizeQuestions([{ ...questions[0], options: questions[0].options.slice(1) }]), /four options/);
+  assert.throws(() => normalizeQuestions([{ ...questions[0], options: questions[0].options.slice(2) }]), /three or four options/);
   assert.throws(() => normalizeQuestions([{ ...questions[0], correctOptionId: "E" }]), /correct option/);
   assert.throws(() => normalizeQuestions([questions[0], questions[0]]), /duplicate/);
   assert.deepEqual(normalizeQuestions([]), []);
+  const threeOptionQuestion = normalizeQuestions([{
+    question: "A caller says your account is at risk. What do you do first?",
+    options: [
+      { id: "A", text: "Hang up; call your bank" },
+      { id: "B", text: "Share the OTP" },
+      { id: "C", text: "Follow their link" },
+    ],
+    correctOptionId: "A",
+    explanation: "Correct. Contact your bank using its official app or number.",
+    momoSays: "Keep your OTP in your own treehouse.",
+    profileTags: "scam_awareness|safe_response",
+  }]);
+  assert.equal(threeOptionQuestion[0].options.length, 3);
+  assert.equal(threeOptionQuestion[0].momoSays, "Keep your OTP in your own treehouse.");
+  assert.deepEqual(threeOptionQuestion[0].profileTags, ["scam_awareness", "safe_response"]);
 });
 test("grades server-side and rejects incomplete, unknown and duplicate answers", () => {
   const answer = { questionId: questions[0]._id, optionId: "B" };
